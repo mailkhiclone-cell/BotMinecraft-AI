@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Secret / credential files
+gemini_key.json
+ai_decision_key.json
+webhook.json
+
+# Runtime data
+ai_memory.json
+ore_locations.json
+build_progress.json
+base_position.json
+farm_origin.json
+waypoints.json
+home.json
+
+# Cloudflare tunnel
+cloudflared
+cloudflared.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.*

@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <title>3D2Y Bot Console</title>
+    <meta name="description" content="3D2Y Bot Console — built on Replit. Update this description to reflect the app." />
+    <meta name="robots" content="index, follow" />
+    <meta property="og:title" content="3D2Y Bot Console" />
+    <meta property="og:description" content="3D2Y Bot Console — built on Replit. Update this description to reflect the app." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="3D2Y Bot Console" />
+    <meta name="twitter:description" content="3D2Y Bot Console — built on Replit. Update this description to reflect the app." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- ── Item texture fix: ẩn alt text khi ảnh lỗi ──────────────────── -->
+    <style>
+      img { color: transparent; font-size: 0; }
+    </style>
+    <script>
+    (function() {
+      var CDNS = [
+        'https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.1/assets/minecraft/textures/item/',
+        'https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.4/assets/minecraft/textures/item/',
+        'https://raw.githubusercontent.com/InventivetalentDev/minecraft-assets/1.21.1/assets/minecraft/textures/item/',
+        'https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.1/assets/minecraft/textures/block/',
+        'https://raw.githubusercontent.com/InventivetalentDev/minecraft-assets/1.21.1/assets/minecraft/textures/block/',
+      ];
+      document.addEventListener('error', function(e) {
+        var img = e.target;
+        if (img.tagName !== 'IMG') return;
+        var tried = parseInt(img.dataset.cdnTried || '0');
+        var name = img.alt || '';
+        if (!name) { img.style.visibility = 'hidden'; return; }
+        if (tried < CDNS.length) {
+          img.dataset.cdnTried = tried + 1;
+          img.src = CDNS[tried] + name + '.png';
+        } else {
+          img.style.visibility = 'hidden';
+          img.style.width = '0';
+          img.style.height = '0';
+        }
+      }, true);
+    })();
+    </script>
+
+    <!-- ── Gemini API Key — Floating Panel (nút 🔑) ─────────────────── -->
+    <script>
+    (function() {
+      'use strict';
+      var LS_CHAT = 'dbot_gemini_chat_key';
+      var LS_DEC  = 'dbot_gemini_decision_key';
+      var LS_OPEN = '__gk_panel_open__';
+      var panelEl = null, btnEl = null, dotEl = null;
+
+      function sendCmd(msg) {
+        return fetch('/api/bot/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ msg: msg, type: 'command' }),
+        }).then(function(r){ return r.ok; }).catch(function(){ return false; });
+      }
+
+      function updateDot() {
+        if (!dotEl) return;
+        var hasKey = !!(localStorage.getItem(LS_CHAT) || localStorage.getItem(LS_DEC));
+        dotEl.style.background = hasKey ? '#10b981' : '#ef4444';
+        dotEl.title = hasKey ? 'Đã cài Gemini key' : 'Chưa có Gemini key';
+      }
+
+      function makeKeyRow(labelHtml, lsKey, cmdFn, hintText) {
+        var wrap = document.createElement('div');
+        wrap.style.cssText = 'margin-bottom:14px;';
+
+        var lbl = document.createElement('div');
+        lbl.style.cssText = 'font-size:11px;color:#9ca3af;margin-bottom:5px;display:flex;align-items:center;gap:5px;';
+        lbl.innerHTML = labelHtml;
+        var badge = document.createElement('span');
+        badge.style.cssText = 'margin-left:auto;font-size:9px;padding:1px 6px;border-radius:3px;';
+        var savedVal = localStorage.getItem(lsKey) || '';
+        badge.textContent = savedVal ? '● Đã cài' : '○ Chưa cài';
+        badge.style.background = savedVal ? 'rgba(16,185,129,.2)' : 'rgba(100,100,100,.2)';
+        badge.style.color = savedVal ? '#34d399' : '#6b7280';
+        lbl.appendChild(badge);
+        wrap.appendChild(lbl);
+
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:4px;';
+
+        var inp = document.createElement('input');
+        inp.type = 'password';
+        inp.value = savedVal;
+        inp.autocomplete = 'off';
+        inp.placeholder = lsKey === LS_DEC ? 'Để trống = dùng chung Chat Key' : 'AIza... hoặc AQ...';
+        inp.style.cssText = 'flex:1;height:30px;font-size:11px;font-family:monospace;background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:0 9px;color:#e5e7eb;outline:none;transition:border-color .15s;';
+        inp.addEventListener('focus', function(){ this.style.borderColor='rgba(16,185,129,.7)'; });
+        inp.addEventListener('blur',  function(){ this.style.borderColor='rgba(255,255,255,0.15)'; });
+
+        var eye = document.createElement('button');
+        eye.textContent = '👁';
+        eye.style.cssText = 'height:30px;width:30px;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:transparent;cursor:pointer;font-size:13px;color:#9ca3af;flex-shrink:0;';
+        eye.addEventListener('click', function(){ inp.type = inp.type==='password'?'text':'password'; });
+
+        var btn = document.createElement('button');
+        btn.textContent = 'Lưu';
+        btn.style.cssText = 'height:30px;padding:0 12px;font-size:11px;font-weight:700;border-radius:6px;border:none;cursor:pointer;background:#059669;color:#fff;flex-shrink:0;transition:background .15s;';
+        btn.addEventListener('click', function() {
+          var key = inp.value.trim();
+          btn.disabled = true; btn.textContent = '...';
+          var cmd = cmdFn(key);
+          sendCmd(cmd).then(function(ok) {
+            btn.disabled = false;
+            if (ok) {
+              key ? localStorage.setItem(lsKey, key) : localStorage.removeItem(lsKey);
+              badge.textContent = key ? '● Đã cài' : '○ Chưa cài';
+              badge.style.background = key ? 'rgba(16,185,129,.2)' : 'rgba(100,100,100,.2)';
+              badge.style.color = key ? '#34d399' : '#6b7280';
+              btn.textContent = '✓'; btn.style.background = '#16a34a';
+              updateDot();
+              setTimeout(function(){ btn.textContent='Lưu'; btn.style.background='#059669'; }, 1800);
+            } else {
+              btn.textContent = '✗'; btn.style.background = '#dc2626';
+              setTimeout(function(){ btn.textContent='Lưu'; btn.style.background='#059669'; }, 1800);
+            }
+          });
+        });
+
+        row.appendChild(inp); row.appendChild(eye); row.appendChild(btn);
+        wrap.appendChild(row);
+
+        var hint = document.createElement('div');
+        hint.style.cssText = 'font-size:9px;color:#6b7280;margin-top:3px;';
+        hint.textContent = hintText;
+        wrap.appendChild(hint);
+
+        return wrap;
+      }
+
+      function createPanel() {
+        // ── Nút 🔑 nổi (đặt bên trái nút 🤖) ──
+        btnEl = document.createElement('div');
+        btnEl.id = '__gk_btn__';
+        btnEl.title = 'Gemini API Key';
+        btnEl.innerHTML = '<img src="https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.4/assets/minecraft/textures/item/trial_key.png" style="width:26px;height:26px;image-rendering:pixelated;" alt="key">';
+        btnEl.style.cssText = 'position:fixed;bottom:72px;right:112px;z-index:9999;width:42px;height:42px;border-radius:50%;background:#065f46;box-shadow:0 2px 12px #0008;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:20px;user-select:none;transition:transform .15s;';
+
+        dotEl = document.createElement('span');
+        dotEl.style.cssText = 'position:absolute;top:-3px;right:-3px;width:11px;height:11px;border-radius:50%;border:2px solid #111;';
+        btnEl.appendChild(dotEl);
+        updateDot();
+        document.body.appendChild(btnEl);
+
+        // ── Panel ──
+        var savedOpen = sessionStorage.getItem(LS_OPEN) === '1';
+        panelEl = document.createElement('div');
+        panelEl.id = '__gk_panel__';
+        panelEl.style.cssText = 'position:fixed;bottom:120px;right:16px;z-index:9998;width:310px;background:#0f1f16;border:1px solid #065f46;border-radius:10px;box-shadow:0 4px 24px #0009;display:'+(savedOpen?'block':'none')+';font-family:sans-serif;overflow:hidden;';
+
+        // Header
+        var hdr = document.createElement('div');
+        hdr.style.cssText = 'background:#065f46;padding:10px 14px;display:flex;align-items:center;gap:8px;';
+        hdr.innerHTML = '<img src="https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.4/assets/minecraft/textures/item/trial_key.png" style="width:20px;height:20px;image-rendering:pixelated;" alt="key"><span style="color:#fff;font-weight:700;font-size:13px;flex:1;">Gemini API Key</span>';
+        var closeBtn = document.createElement('span');
+        closeBtn.textContent = '✕';
+        closeBtn.style.cssText = 'cursor:pointer;color:#6ee7b7;font-size:16px;padding:0 2px;';
+        closeBtn.addEventListener('click', function(){ panelEl.style.display='none'; sessionStorage.setItem(LS_OPEN,'0'); });
+        hdr.appendChild(closeBtn);
+        panelEl.appendChild(hdr);
+
+        // Body
+        var body = document.createElement('div');
+        body.style.cssText = 'padding:14px;';
+
+        body.appendChild(makeKeyRow(
+          '<span style="font-size:14px">🧠</span> <strong style="color:#e5e7eb;">Chat Key</strong>',
+          LS_CHAT,
+          function(key){ return key ? 'set ai '+key : 'set ai clear'; },
+          'Dùng cho: chat in-game, test ai. Lấy tại aistudio.google.com/apikey'
+        ));
+
+        body.appendChild(makeKeyRow(
+          '<span style="font-size:14px">⚡</span> <strong style="color:#e5e7eb;">Decision Key</strong> <span style="font-size:9px;color:#6b7280;">(tùy chọn)</span>',
+          LS_DEC,
+          function(key){ return key ? 'set ai decision '+key : 'set ai decision clear'; },
+          'Dùng cho: AI Mode. Bỏ trống = dùng chung Chat Key.'
+        ));
+
+        // Nút Test Key
+        var testBtn = document.createElement('button');
+        testBtn.textContent = '🔬 Test Chat Key';
+        testBtn.style.cssText = 'width:100%;height:30px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.3);border-radius:6px;color:#34d399;font-size:11px;font-weight:600;cursor:pointer;margin-top:2px;transition:background .15s;';
+        testBtn.addEventListener('click', function() {
+          testBtn.textContent = '...';
+          sendCmd('test ai').then(function(ok) {
+            testBtn.textContent = ok ? '✓ Đã gửi lệnh test (xem log)' : '✗ Lỗi';
+            setTimeout(function(){ testBtn.textContent='🔬 Test Chat Key'; }, 2500);
+          });
+        });
+        body.appendChild(testBtn);
+
+        panelEl.appendChild(body);
+        document.body.appendChild(panelEl);
+
+        // Toggle panel
+        btnEl.addEventListener('click', function() {
+          var open = panelEl.style.display !== 'none';
+          panelEl.style.display = open ? 'none' : 'block';
+          sessionStorage.setItem(LS_OPEN, open ? '0' : '1');
+        });
+        btnEl.addEventListener('mouseenter', function(){ btnEl.style.transform='scale(1.1)'; });
+        btnEl.addEventListener('mouseleave', function(){ btnEl.style.transform='scale(1)'; });
+
+        // Restore session keys
+        var sc = localStorage.getItem(LS_CHAT), sd = localStorage.getItem(LS_DEC);
+        if (sc) sendCmd('set ai ' + sc);
+        if (sd) sendCmd('set ai decision ' + sd);
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', createPanel);
+      } else {
+        setTimeout(createPanel, 600);
+      }
+    })();
+    </script>
+    <!-- ─────────────────────────────────────────────────────────────── -->
+
+    <!-- ── Discord Webhook UI injection vào SERVER CONFIG ─────────────── -->
+    <script>
+    (function() {
+      var WEBHOOK_KEY = 'dbot_webhook_url';
+      var injected   = false;
+
+      // Gửi webhook URL đến bot qua /api/bot/config
+      function saveWebhook(url) {
+        return fetch('/api/bot/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ discordWebhook: url }),
+        }).then(function(r){ return r.ok; }).catch(function(){ return false; });
+      }
+
+      // Tạo UI Discord Webhook field
+      function buildWebhookField(savedUrl) {
+        var wrap = document.createElement('div');
+        wrap.id = '__dw_field__';
+        wrap.style.cssText = 'margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px;';
+
+        // Label
+        var lbl = document.createElement('label');
+        lbl.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:10px;color:#9ca3af;margin-bottom:4px;';
+        lbl.innerHTML = '<span style="font-size:13px">🔔</span> Discord Webhook';
+        wrap.appendChild(lbl);
+
+        // Status badge
+        var badge = document.createElement('span');
+        badge.style.cssText = 'font-size:9px;padding:1px 5px;border-radius:3px;margin-left:auto;';
+        updateBadge(badge, !!savedUrl);
+        lbl.appendChild(badge);
+
+        // Row: input + button
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:4px;';
+
+        var inp = document.createElement('input');
+        inp.type = 'password';
+        inp.placeholder = 'https://discord.com/api/webhooks/...';
+        inp.value = savedUrl || '';
+        inp.autocomplete = 'off';
+        inp.style.cssText = [
+          'flex:1;height:28px;font-size:11px;font-family:monospace;',
+          'background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.15);',
+          'border-radius:6px;padding:0 8px;color:#e5e7eb;outline:none;',
+          'transition:border-color .15s;',
+        ].join('');
+        inp.addEventListener('focus', function(){ this.style.borderColor='rgba(99,102,241,.7)'; });
+        inp.addEventListener('blur',  function(){ this.style.borderColor='rgba(255,255,255,0.15)'; });
+
+        var btn = document.createElement('button');
+        btn.textContent = 'Lưu';
+        btn.style.cssText = [
+          'height:28px;padding:0 10px;font-size:11px;font-weight:600;',
+          'border-radius:6px;border:none;cursor:pointer;white-space:nowrap;',
+          'background:#4f46e5;color:#fff;transition:background .15s;',
+        ].join('');
+        btn.onmouseenter = function(){ this.style.background='#4338ca'; };
+        btn.onmouseleave = function(){ this.style.background='#4f46e5'; };
+
+        btn.addEventListener('click', function() {
+          var url = inp.value.trim();
+          btn.disabled = true; btn.textContent = '...';
+          saveWebhook(url).then(function(ok) {
+            btn.disabled = false;
+            if (ok) {
+              localStorage.setItem(WEBHOOK_KEY, url);
+              btn.textContent = '✓';
+              btn.style.background = '#16a34a';
+              updateBadge(badge, !!url);
+              setTimeout(function(){ btn.textContent='Lưu'; btn.style.background='#4f46e5'; }, 1800);
+            } else {
+              btn.textContent = '✗';
+              btn.style.background = '#dc2626';
+              setTimeout(function(){ btn.textContent='Lưu'; btn.style.background='#4f46e5'; }, 1800);
+            }
+          });
+        });
+
+        // Show/hide password toggle
+        var eye = document.createElement('button');
+        eye.textContent = '👁';
+        eye.title = 'Hiện/ẩn URL';
+        eye.style.cssText = 'height:28px;width:28px;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:transparent;cursor:pointer;font-size:12px;color:#9ca3af;';
+        eye.addEventListener('click', function(){
+          inp.type = inp.type === 'password' ? 'text' : 'password';
+        });
+
+        row.appendChild(inp);
+        row.appendChild(eye);
+        row.appendChild(btn);
+        wrap.appendChild(row);
+
+        // Hint
+        var hint = document.createElement('div');
+        hint.style.cssText = 'font-size:9px;color:#6b7280;margin-top:3px;';
+        hint.textContent = 'Hoặc gõ: status discord — để gửi báo cáo ngay';
+        wrap.appendChild(hint);
+
+        return wrap;
+      }
+
+      function updateBadge(el, hasUrl) {
+        if (hasUrl) {
+          el.textContent = '● Đã kết nối';
+          el.style.background = 'rgba(22,163,74,.25)';
+          el.style.color = '#4ade80';
+        } else {
+          el.textContent = '○ Chưa cấu hình';
+          el.style.background = 'rgba(100,100,100,.2)';
+          el.style.color = '#6b7280';
+        }
+      }
+
+      // Inject vào panel khi nó được render
+      function tryInject() {
+        if (injected) return;
+        // Tìm SERVER CONFIG collapse content (có "space-y-3 p-3" và chứa "Host")
+        var panels = document.querySelectorAll('[class*="space-y-3"][class*="p-3"]');
+        var target = null;
+        for (var i = 0; i < panels.length; i++) {
+          var txt = panels[i].textContent || '';
+          if (txt.includes('Host') && (txt.includes('Port') || txt.includes('Username'))) {
+            target = panels[i];
+            break;
+          }
+        }
+        if (!target) return;
+        if (target.querySelector('#__dw_field__')) { injected = true; return; }
+
+        var savedUrl = localStorage.getItem(WEBHOOK_KEY) || '';
+        // Nếu có URL đã lưu, tự động gửi cho bot khi trang load (restore session)
+        if (savedUrl && !injected) {
+          saveWebhook(savedUrl);
+        }
+
+        target.appendChild(buildWebhookField(savedUrl));
+        injected = true;
+      }
+
+      // Reset injected khi panel đóng rồi mở lại
+      var obs = new MutationObserver(function() {
+        if (injected && !document.getElementById('__dw_field__')) injected = false;
+        tryInject();
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+    })();
+    </script>
+    <!-- ──────────────────────────────────────────────────────────────── -->
+
+    <!-- ── AI Decision Log Panel ──────────────────────────────────────── -->
+    <script>
+    (function() {
+      'use strict';
+      var AI_LOG_KEY = '__ai_log_panel_open__';
+      var aiLog = [];
+      var panelEl = null, listEl = null, badgeEl = null, btnEl = null;
+      var wsAI = null, wsRetryTimer = null;
+      var SOURCE_COLOR = { gemini: '#4ade80', heuristic: '#facc15' };
+      var ACTION_ICON = { retreat:'🚨', eat:'🍖', hunt:'🏹', attack_hostile:'⚔️', idle:'💤', chop:'🪓', mine:'⛏️', strip_mine:'⛏️', explore:'🧭', equip_armor:'🛡️', deposit:'📦', smelt:'🔥', sleep:'😴', brew:'🧪', fish:'🎣', surface:'⬆️' };
+
+      function fmt(ts) {
+        var d = new Date(ts); return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')+':'+d.getSeconds().toString().padStart(2,'0');
+      }
+      function esc(s){ return String(s||'').replace(/[<>&"]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+
+      function addEntry(e) {
+        aiLog.unshift(e);
+        if (aiLog.length > 100) aiLog = aiLog.slice(0, 100);
+        if (listEl) renderList();
+        // Update badge (unseen count) when panel closed
+        if (panelEl && panelEl.style.display === 'none' && badgeEl) {
+          var cur = parseInt(badgeEl.textContent||'0', 10) + 1;
+          badgeEl.textContent = cur > 99 ? '99+' : cur;
+          badgeEl.style.display = 'flex';
+        }
+      }
+
+      function renderList() {
+        if (!listEl) return;
+        listEl.innerHTML = aiLog.slice(0,50).map(function(e) {
+          var icon = ACTION_ICON[e.action] || '🤖';
+          var col  = SOURCE_COLOR[e.source] || '#94a3b8';
+          var stageTag = e.stage ? '<span style="background:#1e3a5f;color:#7dd3fc;padding:1px 5px;border-radius:3px;font-size:10px;margin-left:4px;">'+esc(e.stage)+'</span>' : '';
+          return '<div style="border-bottom:1px solid #1e293b;padding:5px 8px;display:flex;flex-direction:column;gap:2px;">'
+            + '<div style="display:flex;align-items:center;gap:6px;">'
+            + '<span style="font-size:15px;">'+icon+'</span>'
+            + '<span style="font-weight:700;color:'+col+';font-size:12px;">'+esc(e.action)+'</span>'
+            + stageTag
+            + '<span style="margin-left:auto;font-size:10px;color:#64748b;">'+fmt(e.time)+'</span>'
+            + (e.source==='heuristic'?'<span style="font-size:9px;color:#facc15;border:1px solid #713f12;padding:0 3px;border-radius:2px;">heuristic</span>':'')
+            + '</div>'
+            + (e.reason?'<div style="font-size:11px;color:#cbd5e1;padding-left:21px;">'+esc(e.reason)+'</div>':'')
+            + (e.stageTip?'<div style="font-size:10px;color:#64748b;padding-left:21px;font-style:italic;">'+esc(e.stageTip)+'</div>':'')
+            + '</div>';
+        }).join('');
+      }
+
+      function createPanel() {
+        // Floating toggle button
+        btnEl = document.createElement('div');
+        btnEl.id = '__ai_log_btn__';
+        btnEl.title = 'AI Decision Log (phím `)';
+        btnEl.innerHTML = '<img src="https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.4/assets/minecraft/textures/item/written_book.png" style="width:26px;height:26px;image-rendering:pixelated;" alt="log">';
+        btnEl.style.cssText = 'position:fixed;bottom:72px;right:16px;z-index:9999;width:42px;height:42px;border-radius:50%;background:#1e40af;box-shadow:0 2px 12px #0008;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:20px;user-select:none;transition:transform .15s;';
+
+        badgeEl = document.createElement('span');
+        badgeEl.style.cssText = 'position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:50%;width:18px;height:18px;font-size:10px;font-weight:700;display:none;align-items:center;justify-content:center;';
+        btnEl.style.position = 'fixed';
+        btnEl.appendChild(badgeEl);
+        document.body.appendChild(btnEl);
+
+        // Panel
+        panelEl = document.createElement('div');
+        panelEl.id = '__ai_log_panel__';
+        var savedOpen = sessionStorage.getItem(AI_LOG_KEY) === '1';
+        panelEl.style.cssText = 'position:fixed;bottom:120px;right:16px;z-index:9998;width:320px;max-height:420px;background:#0f172a;border:1px solid #1e40af;border-radius:10px;box-shadow:0 4px 24px #0009;display:'+(savedOpen?'flex':'none')+';flex-direction:column;font-family:monospace;overflow:hidden;';
+
+        // Header
+        var hdr = document.createElement('div');
+        hdr.style.cssText = 'background:#1e40af;padding:8px 12px;display:flex;align-items:center;gap:8px;';
+        hdr.innerHTML = '<img src="https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.4/assets/minecraft/textures/item/written_book.png" style="width:20px;height:20px;image-rendering:pixelated;" alt="log"><span style="color:#fff;font-weight:700;font-size:13px;flex:1;">AI Decision Log</span>'
+          + '<span id="__ai_log_count__" style="font-size:10px;color:#93c5fd;"></span>'
+          + '<span id="__ai_log_src__" style="font-size:10px;border-radius:3px;padding:1px 6px;background:#172554;color:#7dd3fc;margin-left:4px;">⬤ offline</span>'
+          + '<span onclick="document.getElementById(\'__ai_log_panel__\').style.display=\'none\';sessionStorage.setItem(\''+AI_LOG_KEY+'\',\'0\')" style="cursor:pointer;color:#93c5fd;font-size:16px;padding:0 2px;" title="Đóng">✕</span>';
+        panelEl.appendChild(hdr);
+
+        // Legend
+        var leg = document.createElement('div');
+        leg.style.cssText = 'padding:4px 10px;font-size:9px;color:#475569;border-bottom:1px solid #1e293b;display:flex;gap:10px;';
+        leg.innerHTML = '<span><span style="color:#4ade80;">●</span> Gemini AI</span><span><span style="color:#facc15;">●</span> Heuristic fallback</span>';
+        panelEl.appendChild(leg);
+
+        // List
+        listEl = document.createElement('div');
+        listEl.style.cssText = 'overflow-y:auto;flex:1;';
+        listEl.innerHTML = '<div style="color:#475569;text-align:center;padding:20px;font-size:12px;">Chưa có quyết định nào.<br>Bật AI Mode để bắt đầu.</div>';
+        panelEl.appendChild(listEl);
+
+        document.body.appendChild(panelEl);
+
+        btnEl.addEventListener('click', function() {
+          var open = panelEl.style.display !== 'none';
+          panelEl.style.display = open ? 'none' : 'flex';
+          sessionStorage.setItem(AI_LOG_KEY, open ? '0' : '1');
+          if (!open) { if(badgeEl){badgeEl.textContent='';badgeEl.style.display='none';} renderList(); }
+        });
+
+        // Keyboard shortcut: backtick to toggle
+        document.addEventListener('keydown', function(ev) {
+          if (ev.key === '`' && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+            var t = document.activeElement;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+            var open = panelEl.style.display !== 'none';
+            panelEl.style.display = open ? 'none' : 'flex';
+            sessionStorage.setItem(AI_LOG_KEY, open ? '0' : '1');
+            if (!open) { if(badgeEl){badgeEl.textContent='';badgeEl.style.display='none';} renderList(); }
+          }
+        });
+
+        // Hover effect
+        btnEl.addEventListener('mouseenter', function(){ btnEl.style.transform='scale(1.1)'; });
+        btnEl.addEventListener('mouseleave', function(){ btnEl.style.transform='scale(1)'; });
+      }
+
+      function connectWS() {
+        if (wsAI) { try { wsAI.close(); } catch(_){} }
+        var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var url   = proto + '//' + location.host + '/api/ws';
+        try {
+          wsAI = new WebSocket(url);
+        } catch(e) { scheduleRetry(); return; }
+
+        var srcEl = document.getElementById('__ai_log_src__');
+        var cntEl = document.getElementById('__ai_log_count__');
+
+        wsAI.onopen = function() {
+          if (srcEl) { srcEl.textContent = '⬤ online'; srcEl.style.color = '#4ade80'; }
+        };
+        wsAI.onmessage = function(ev) {
+          try {
+            var d = JSON.parse(ev.data);
+            // Ingest full decision log on status event
+            if (d.type === 'status' && Array.isArray(d.aiDecisionLog) && d.aiDecisionLog.length > 0) {
+              // Only seed on first load (when aiLog is empty)
+              if (aiLog.length === 0) {
+                aiLog = d.aiDecisionLog.slice().reverse(); // newest first
+                if (listEl) renderList();
+              }
+            }
+            // Real-time single decision
+            if (d.type === 'status' && d.aiDecision && d.aiDecision.action) {
+              addEntry(d.aiDecision);
+              if (cntEl) cntEl.textContent = '#' + (d.aiDecision.total||aiLog.length);
+            }
+          } catch(_) {}
+        };
+        wsAI.onerror = function() {};
+        wsAI.onclose = function() {
+          if (srcEl) { srcEl.textContent = '⬤ offline'; srcEl.style.color = '#ef4444'; }
+          scheduleRetry();
+        };
+      }
+
+      function scheduleRetry() {
+        if (wsRetryTimer) return;
+        wsRetryTimer = setTimeout(function() { wsRetryTimer = null; connectWS(); }, 4000);
+      }
+
+      function init() {
+        if (document.getElementById('__ai_log_btn__')) return;
+        createPanel();
+        connectWS();
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+      } else {
+        setTimeout(init, 500);
+      }
+    })();
+    </script>
+    <!-- ──────────────────────────────────────────────────────────────── -->
+
+    <!-- ── AI Mode Control Panel ──────────────────────────────────────── -->
+    <script>
+    (function() {
+      'use strict';
+      var PANEL_PORT = 8090;
+      var panelEl = null, btnEl = null, badgeEl = null;
+      var wsCtrl = null, wsRetry = null;
+      var AI_OPEN_KEY = '__ai_ctrl_panel_open__';
+
+      function apiBase() {
+        return 'http://' + location.hostname + ':' + PANEL_PORT;
+      }
+
+      function esc(s){ return String(s||'').replace(/[<>&"]/g,function(c){return({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'})[c];}); }
+
+      function sendCmd(c) {
+        return fetch(apiBase()+'/cmd', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({c: c})
+        }).then(function(r){ return r.json(); }).catch(function(e){ return {ok:false, msg: e.message}; });
+      }
+
+      function appendLog(msg) {
+        var log = document.getElementById('__aictrl_log__');
+        if (!log) return;
+        var line = document.createElement('div');
+        line.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+        log.insertBefore(line, log.firstChild);
+        if (log.children.length > 30) log.removeChild(log.lastChild);
+      }
+
+      function updateBadge(s) {
+        if (!badgeEl) return;
+        if (s && s.aiEnabled && !s.paused) { badgeEl.textContent='🟢'; badgeEl.style.display='flex'; }
+        else if (s && s.aiEnabled && s.paused) { badgeEl.textContent='⏸'; badgeEl.style.display='flex'; }
+        else if (s && !s.aiEnabled) { badgeEl.textContent='🔴'; badgeEl.style.display='flex'; }
+      }
+
+      function applyStatus(s) {
+        updateBadge(s);
+        var badge = document.getElementById('__aictrl_badge__');
+        if (badge) {
+          if (s.aiEnabled && !s.paused) { badge.textContent='🟢 BẬT'; badge.style.background='rgba(0,200,83,.15)'; badge.style.color='#00e676'; badge.style.border='1px solid #00e67633'; }
+          else if (s.aiEnabled && s.paused) { badge.textContent='⏸ PAUSE'; badge.style.background='rgba(255,145,0,.15)'; badge.style.color='#ffab40'; badge.style.border='1px solid #ffab4033'; }
+          else { badge.textContent='🔴 TẮT'; badge.style.background='rgba(255,0,0,.1)'; badge.style.color='#ff5252'; badge.style.border='1px solid #ff525233'; }
+        }
+        var el = function(id){ return document.getElementById(id); };
+        if(el('__aictrl_stage__')) el('__aictrl_stage__').textContent = (s.stage||'—').toUpperCase();
+        if(el('__aictrl_hp__'))    el('__aictrl_hp__').textContent    = s.hp!=null ? s.hp+'/20 ❤ '+s.food+'/20 🍗' : '—';
+        if(el('__aictrl_dec__'))   el('__aictrl_dec__').textContent   = (s.totalDecisions||0)+' quyết định';
+        if(el('__aictrl_last__'))  el('__aictrl_last__').textContent  = s.lastAction ? (s.lastTime||0)+'ph: '+s.lastAction : 'chưa có';
+        if(el('__aictrl_ck__'))    el('__aictrl_ck__').textContent    = 'Chat: '+(s.chatKey||'❌ chưa set');
+        if(el('__aictrl_ak__'))    el('__aictrl_ak__').textContent    = 'AI: '+(s.aiKey||'(dùng chat key)');
+      }
+
+      function refreshStatus() {
+        fetch(apiBase()+'/status').then(function(r){ return r.json(); }).then(applyStatus).catch(function(){});
+      }
+
+      function connectWS() {
+        if (wsCtrl) { try{ wsCtrl.close(); }catch(_){} }
+        var proto = location.protocol==='https:' ? 'wss:' : 'ws:';
+        try { wsCtrl = new WebSocket(proto+'//'+location.host+'/api/ws'); } catch(_){ scheduleRetry(); return; }
+        wsCtrl.onmessage = function(ev) {
+          try {
+            var d = JSON.parse(ev.data);
+            if (d.type==='status') {
+              var s = {
+                aiEnabled: d.aiEnabled||false,
+                paused: d.aiPaused||false,
+                stage: d.aiStage||d.stage||'—',
+                hp: d.health!=null?Math.round(d.health):null,
+                food: d.food!=null?Math.round(d.food):null,
+                totalDecisions: d.aiTotalDecisions||0,
+                lastAction: d.aiLastAction||null,
+                lastTime: d.aiLastTime||null,
+                chatKey: null, aiKey: null,
+              };
+              updateBadge(s);
+            }
+          } catch(_) {}
+        };
+        wsCtrl.onclose = function(){ scheduleRetry(); };
+        wsCtrl.onerror = function(){};
+      }
+
+      function scheduleRetry() {
+        if (wsRetry) return;
+        wsRetry = setTimeout(function(){ wsRetry=null; connectWS(); }, 5000);
+      }
+
+      function createPanel() {
+        // ── Toggle button (🤖) — đặt bên trái nút AI Log (🧠) ──
+        btnEl = document.createElement('div');
+        btnEl.id = '__ai_ctrl_btn__';
+        btnEl.title = 'AI Mode Control';
+        btnEl.innerHTML = '<img src="https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.4/assets/minecraft/textures/item/nether_star.png" style="width:26px;height:26px;image-rendering:pixelated;" alt="ai">';
+        btnEl.style.cssText = 'position:fixed;bottom:72px;right:64px;z-index:9999;width:42px;height:42px;border-radius:50%;background:#1a237e;box-shadow:0 2px 12px #0008;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:20px;user-select:none;transition:transform .15s;';
+
+        badgeEl = document.createElement('span');
+        badgeEl.style.cssText = 'position:absolute;top:-5px;right:-5px;width:18px;height:18px;border-radius:50%;font-size:10px;display:none;align-items:center;justify-content:center;background:#1a237e;';
+        btnEl.style.position='fixed';
+        btnEl.appendChild(badgeEl);
+        document.body.appendChild(btnEl);
+
+        // ── Panel ──
+        var savedOpen = sessionStorage.getItem(AI_OPEN_KEY)==='1';
+        panelEl = document.createElement('div');
+        panelEl.id = '__ai_ctrl_panel__';
+        panelEl.style.cssText = 'position:fixed;bottom:120px;right:64px;z-index:9998;width:280px;background:#0b0f1a;border:1px solid #1a237e;border-radius:12px;box-shadow:0 4px 24px #0009;display:'+(savedOpen?'flex':'none')+';flex-direction:column;font-family:monospace;overflow:hidden;';
+
+        // Header
+        var hdr = document.createElement('div');
+        hdr.style.cssText = 'background:#1a237e;padding:8px 12px;display:flex;align-items:center;gap:8px;';
+        hdr.innerHTML = '<img src="https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.4/assets/minecraft/textures/item/nether_star.png" style="width:20px;height:20px;image-rendering:pixelated;" alt="ai"><span style="color:#fff;font-weight:700;font-size:13px;flex:1;">AI Control</span>'
+          + '<span id="__aictrl_badge__" style="font-size:10px;padding:1px 7px;border-radius:10px;font-weight:700;">—</span>'
+          + '<span onclick="document.getElementById(\'__ai_ctrl_panel__\').style.display=\'none\';sessionStorage.setItem(\''+AI_OPEN_KEY+'\',\'0\')" style="cursor:pointer;color:#7986cb;font-size:16px;padding-left:6px;" title="Đóng">✕</span>';
+        panelEl.appendChild(hdr);
+
+        // Status info
+        var info = document.createElement('div');
+        info.style.cssText = 'padding:8px 12px;font-size:11px;color:#90a4ae;border-bottom:1px solid #1a237e22;';
+        info.innerHTML = '<div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="color:#546e7a;">Stage</span><span id="__aictrl_stage__" style="color:#e0e0e0;font-weight:700;">—</span></div>'
+          +'<div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="color:#546e7a;">HP / Food</span><span id="__aictrl_hp__" style="color:#e0e0e0;">—</span></div>'
+          +'<div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="color:#546e7a;">Quyết định</span><span id="__aictrl_dec__" style="color:#81d4fa;">—</span></div>'
+          +'<div style="display:flex;justify-content:space-between;flex-wrap:wrap;margin-bottom:3px;"><span style="color:#546e7a;">Lần cuối</span><span id="__aictrl_last__" style="color:#b0bec5;max-width:160px;text-align:right;font-size:10px;">—</span></div>'
+          +'<div style="margin-top:4px;font-size:9px;"><div id="__aictrl_ck__" style="color:#455a64;">Chat: —</div><div id="__aictrl_ak__" style="color:#455a64;">AI: —</div></div>';
+        panelEl.appendChild(info);
+
+        // Buttons grid
+        var btns = document.createElement('div');
+        btns.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:10px 12px;';
+        var btnDefs = [
+          {label:'🟢 BẬT AI',  bg:'#00695c', cmd:'ai on'},
+          {label:'🔴 TẮT AI',  bg:'#b71c1c', cmd:'ai off'},
+          {label:'⏸ Pause 1h', bg:'#e65100', cmd:'ai pause'},
+          {label:'▶ Resume',   bg:'#1565c0', cmd:'ai resume'},
+        ];
+        btnDefs.forEach(function(d) {
+          var b = document.createElement('button');
+          b.textContent = d.label;
+          b.style.cssText = 'background:'+d.bg+';color:#fff;border:none;border-radius:8px;padding:9px 4px;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:.3px;transition:filter .12s;';
+          b.onmouseenter = function(){ this.style.filter='brightness(1.2)'; };
+          b.onmouseleave = function(){ this.style.filter=''; };
+          b.addEventListener('click', function() {
+            b.disabled=true;
+            sendCmd(d.cmd).then(function(r) {
+              appendLog((r.ok?'✅':'❌')+' '+d.cmd+(r.msg?' → '+r.msg:''));
+              b.disabled=false;
+              setTimeout(refreshStatus, 400);
+            });
+          });
+          btns.appendChild(b);
+        });
+        panelEl.appendChild(btns);
+
+        // Mini log
+        var log = document.createElement('div');
+        log.id = '__aictrl_log__';
+        log.style.cssText = 'padding:0 10px 8px;font-size:10px;color:#546e7a;max-height:80px;overflow-y:auto;font-family:monospace;';
+        panelEl.appendChild(log);
+
+        document.body.appendChild(panelEl);
+
+        // Toggle logic
+        btnEl.addEventListener('click', function(){
+          var open = panelEl.style.display!=='none';
+          panelEl.style.display = open ? 'none' : 'flex';
+          sessionStorage.setItem(AI_OPEN_KEY, open?'0':'1');
+          if (!open) refreshStatus();
+        });
+        btnEl.addEventListener('mouseenter', function(){ btnEl.style.transform='scale(1.1)'; });
+        btnEl.addEventListener('mouseleave', function(){ btnEl.style.transform='scale(1)'; });
+
+        // Auto-refresh status every 5s
+        refreshStatus();
+        setInterval(refreshStatus, 5000);
+        connectWS();
+      }
+
+      function init() {
+        if (document.getElementById('__ai_ctrl_btn__')) return;
+        createPanel();
+      }
+
+      if (document.readyState==='loading') {
+        document.addEventListener('DOMContentLoaded', init);
+      } else {
+        setTimeout(init, 600);
+      }
+    })();
+    </script>
+    <!-- ──────────────────────────────────────────────────────────────── -->
+
+    <script type="module" crossorigin src="/assets/index-CuqGFv9D.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-0Ui0IY1H.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
