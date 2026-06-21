@@ -104,86 +104,6 @@ const HOSTILE_MOBS = new Set([
   'zoglin','piglin_brute','warden','zombified_piglin','zombie_pigman',
 ]);
 
-// ═══════════════════════════════════════════════════════════════════
-//  SHARED UTILITIES — Extracted from repeated patterns across bot.cjs
-// ═══════════════════════════════════════════════════════════════════
-
-// ── SLEEP UTILITY ─────────────────────────────────────────────────
-// Replaces 118+ occurrences of `await sleep(ms)`
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-// ── FOOD LISTS (single source of truth) ───────────────────────────
-// Previously defined 3 times with inconsistent items
-const COOKED_FOODS = [
-  'cooked_beef','cooked_porkchop','cooked_mutton','cooked_chicken',
-  'cooked_salmon','cooked_cod','cooked_rabbit',
-  'bread','baked_potato','apple',
-];
-const RAW_FOODS = ['raw_beef','raw_porkchop','raw_mutton','raw_chicken','raw_salmon','raw_cod','raw_rabbit'];
-
-// ── STAGE-TO-ACTION MAP (single source of truth) ──────────────────
-// Previously duplicated in heuristicFallbackDecision and executeAIDecision
-const STAGE_ACTION_MAP = {
-  early: 'chop', wood: 'mine', stone: 'mine', iron: 'strip_mine',
-  diamond: 'explore', nether: 'explore', pre_end: 'explore', end_done: 'explore',
-};
-
-// ── HOSTILE MOB FINDER ────────────────────────────────────────────
-// Replaces 11+ duplicated hostile mob filter/sort patterns
-function findNearbyHostiles(botRef, maxDist = 24) {
-  const pos = botRef?.entity?.position;
-  if (!pos) return [];
-  return Object.values(botRef.entities || {})
-    .filter(e => e.type === 'mob' && HOSTILE_MOBS.has(e.name || e.mobType || '')
-      && e.position?.distanceTo(pos) < maxDist)
-    .sort((a, b) => a.position.distanceTo(pos) - b.position.distanceTo(pos));
-}
-
-// ── INVENTORY HELPERS ─────────────────────────────────────────────
-// Replaces 23+ occurrences of bot.inventory.items().find(i => i.name === ...)
-function findInvItem(botRef, name) {
-  return botRef?.inventory?.items().find(i => i.name === name) || null;
-}
-function hasInvItem(botRef, name) {
-  return botRef?.inventory?.items().some(i => i.name === name) || false;
-}
-function countInvItem(botRef, name) {
-  return (botRef?.inventory?.items() || [])
-    .filter(i => i.name === name).reduce((s, i) => s + i.count, 0);
-}
-function countInvItemsBySubstr(botRef, substr) {
-  return (botRef?.inventory?.items() || [])
-    .filter(i => i.name.includes(substr)).reduce((s, i) => s + i.count, 0);
-}
-
-// ── RATE-LIMITER QUEUE FACTORY ────────────────────────────────────
-// Replaces duplicated _scheduleAI/_drainAIQueue and _scheduleAIDecision/_drainAIDecisionQueue
-function createRateLimiter(minIntervalMs = 4000) {
-  const state = { queue: [], lastCall: 0, running: false };
-
-  async function drain() {
-    state.running = true;
-    while (state.queue.length > 0) {
-      const now = Date.now();
-      const wait = Math.max(0, state.lastCall + minIntervalMs - now);
-      if (wait > 0) await sleep(wait);
-      const { fn, resolve, reject } = state.queue.shift();
-      state.lastCall = Date.now();
-      try { resolve(await fn()); } catch (e) { reject(e); }
-    }
-    state.running = false;
-  }
-
-  function schedule(fn) {
-    return new Promise((resolve, reject) => {
-      state.queue.push({ fn, resolve, reject });
-      if (!state.running) drain();
-    });
-  }
-
-  return { schedule, state };
-}
-
 // ── TRẠNG THÁI ────────────────────────────────────────────────────
 let bot = null, mcData = null;
 let isBusy = false, stopTask = false, isFollowing = false, isEating = false, isHunting = false;
@@ -292,7 +212,7 @@ async function findOrPlaceCraftingTable() {
       try {
         await bot.equip(tableItem, 'hand');
         await bot.placeBlock(b, new Vec3(0, 1, 0));
-        await sleep(400);
+        await new Promise(r => setTimeout(r, 400));
         return bot.findBlock({ matching: tableId, maxDistance: 6 });
       } catch(_) {}
     }
@@ -624,9 +544,27 @@ let _decKeyRRIndex  = 0;
 
 // ── GLOBAL GEMINI RATE LIMITER ────────────────────────────────────
 // gemini-3.1-flash-lite: 15 RPM → 1 req / 4s (≈15 RPM max)
-const _chatLimiter = createRateLimiter(4000);
-const _aiQueue = _chatLimiter.state.queue; // exposed for queue-length checks
-function _scheduleAI(fn) { return _chatLimiter.schedule(fn); }
+const _aiQueue = [];
+let _aiLastCall = 0;
+let _aiRunning = false;
+function _scheduleAI(fn) {
+  return new Promise((resolve, reject) => {
+    _aiQueue.push({ fn, resolve, reject });
+    if (!_aiRunning) _drainAIQueue();
+  });
+}
+async function _drainAIQueue() {
+  _aiRunning = true;
+  while (_aiQueue.length > 0) {
+    const now = Date.now();
+    const wait = Math.max(0, _aiLastCall + 4000 - now);
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    const { fn, resolve, reject } = _aiQueue.shift();
+    _aiLastCall = Date.now();
+    try { resolve(await fn()); } catch(e) { reject(e); }
+  }
+  _aiRunning = false;
+}
 // ─────────────────────────────────────────────────────────────────
 
 async function getAI(prompt, sys, useHist = false) {
@@ -691,7 +629,7 @@ async function _getAIRaw(prompt, sys, useHist = false) {
             // RPM rate limit (tạm thời): chờ ngắn rồi thử model tiếp
             allModels429 = false; // không phải RPD exhausted
             logW(`[AI] ⏱ RPM limit ${model} key=${_chatKey.slice(0,8)}... → chờ 2s`);
-            await sleep(2000);
+            await new Promise(r => setTimeout(r, 2000));
             continue;
           }
           allModels429 = false;
@@ -874,9 +812,11 @@ function buildAIContext() {
   const items    = invItems.map(i => `${i.name}×${i.count}`).join(', ') || 'trống'; // hiển thị toàn bộ túi
 
   // Thông tin đồ ăn chi tiết
-  const hasRawFood    = invItems.some(i => RAW_FOODS.includes(i.name));
-  const hasCookedFood = invItems.some(i => COOKED_FOODS.includes(i.name));
-  const foodCount     = invItems.filter(i => COOKED_FOODS.includes(i.name)).reduce((s,i)=>s+i.count,0);
+  const COOKED_FOOD = ['cooked_beef','cooked_porkchop','cooked_mutton','cooked_chicken','cooked_salmon','cooked_cod','cooked_rabbit','bread','baked_potato','apple'];
+  const RAW_FOOD    = ['raw_beef','raw_porkchop','raw_mutton','raw_chicken','raw_salmon','raw_cod','raw_rabbit'];
+  const hasRawFood    = invItems.some(i => RAW_FOOD.includes(i.name));
+  const hasCookedFood = invItems.some(i => COOKED_FOOD.includes(i.name));
+  const foodCount     = invItems.filter(i => COOKED_FOOD.includes(i.name)).reduce((s,i)=>s+i.count,0);
 
   // Vũ khí đang cầm
   const heldItem = bot.heldItem?.name || 'tay trần';
@@ -891,7 +831,9 @@ function buildAIContext() {
 
   // Thông tin mob thù
   const _myPos = bot.entity?.position;
-  const allHostiles = findNearbyHostiles(bot, 24);
+  const allHostiles = _myPos ? Object.values(bot.entities || {})
+    .filter(e => e.type === 'mob' && HOSTILE_MOBS.has(e.name || e.mobType || '') && e.position?.distanceTo(_myPos) < 24)
+    .sort((a,b) => a.position.distanceTo(_myPos) - b.position.distanceTo(_myPos)) : [];
   const hostileCount = allHostiles.length;
   const hostiles = _myPos ? allHostiles.slice(0, 5).map(e => `${e.name}(${Math.round(e.position.distanceTo(_myPos))}m)`).join(', ') || 'không có' : 'không có';
   const nearestHostileDist = (hostileCount > 0 && _myPos) ? Math.round(allHostiles[0].position.distanceTo(_myPos)) : 99;
@@ -1039,14 +981,30 @@ Ghi chú: ${memNotes}`;
 
 // ── AI DECISION ───────────────────────────────────────────────────
 // Separate rate-limiter queue for AI Decision key (may differ from chat key)
-const _decisionLimiter = createRateLimiter(4000);
-const _aiDecisionQueue = _decisionLimiter.state.queue; // exposed for queue-length checks
+const _aiDecisionQueue = [];
+let _aiDecisionLastCall = 0;
+let _aiDecisionRunning = false;
 function _scheduleAIDecision(fn) {
   // If using the same key as chat, share the same queue to avoid exceeding 10 RPM
   if (!CONFIG.aiDecisionKey || CONFIG.aiDecisionKey === CONFIG.geminiApiKey) {
     return _scheduleAI(fn);
   }
-  return _decisionLimiter.schedule(fn);
+  return new Promise((resolve, reject) => {
+    _aiDecisionQueue.push({ fn, resolve, reject });
+    if (!_aiDecisionRunning) _drainAIDecisionQueue();
+  });
+}
+async function _drainAIDecisionQueue() {
+  _aiDecisionRunning = true;
+  while (_aiDecisionQueue.length > 0) {
+    const now = Date.now();
+    const wait = Math.max(0, _aiDecisionLastCall + 4000 - now);
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    const { fn, resolve, reject } = _aiDecisionQueue.shift();
+    _aiDecisionLastCall = Date.now();
+    try { resolve(await fn()); } catch(e) { reject(e); }
+  }
+  _aiDecisionRunning = false;
 }
 
 async function getAIDecision() {
@@ -1133,7 +1091,8 @@ OUTPUT FORMAT (JSON thuần, không markdown, không giải thích thêm):
 
   // Nguy hiểm = temperature thấp hơn (nhất quán hơn)
   const hp = bot?.health ?? 20;
-  const hostileNear = findNearbyHostiles(bot, 16).length > 0;
+  const hostileNear = Object.values(bot?.entities || {}).some(e =>
+    e.type === 'mob' && HOSTILE_MOBS.has(e.name || '') && e.position?.distanceTo(bot.entity?.position) < 16);
   const tempValue = (hp < 8 || hostileNear) ? 0.1 : 0.3;
 
   // Round-robin rotation: phân tải đều qua tất cả decision key
@@ -1169,7 +1128,7 @@ OUTPUT FORMAT (JSON thuần, không markdown, không giải thích thêm):
           }
           allModels429 = false;
           logW(`[AI] ⏱ RPM limit ${model} key=${_decKey.slice(0,8)}... → chờ 2s`);
-          await sleep(2000);
+          await new Promise(r => setTimeout(r, 2000));
           continue;
         }
         allModels429 = false;
@@ -1214,14 +1173,18 @@ function heuristicFallbackDecision() {
   const has   = (n) => inv.some(i => i.name.includes(n));
   const _hPos = bot.entity?.position;
 
-  const hostiles = findNearbyHostiles(bot, 20);
+  const hostiles = _hPos ? Object.values(bot.entities || {})
+    .filter(e => e.type==='mob' && HOSTILE_MOBS.has(e.name||e.mobType||'')
+      && e.position?.distanceTo(_hPos) < 20)
+    .sort((a,b) => a.position.distanceTo(_hPos) - b.position.distanceTo(_hPos)) : [];
   const nearestMob = hostiles[0];
   const nearDist   = (nearestMob && _hPos) ? nearestMob.position.distanceTo(_hPos) : 99;
   const isCreeper  = nearestMob?.name === 'creeper';
   const isDangerous = nearestMob && ['warden','elder_guardian'].includes(nearestMob.name);
 
-  const hasCookedFood = inv.some(i => COOKED_FOODS.includes(i.name));
-  const hasRawFood    = inv.some(i => RAW_FOODS.includes(i.name));
+  const COOKED = ['cooked_beef','cooked_porkchop','cooked_mutton','cooked_chicken','cooked_salmon','bread','baked_potato','apple'];
+  const hasCookedFood = inv.some(i => COOKED.includes(i.name));
+  const hasRawFood    = inv.some(i => i.name.startsWith('raw_'));
   const hasFurnace    = mcData && !!bot.findBlock({ matching: mcData.blocksByName['furnace']?.id, maxDistance: 32 });
 
   // Ưu tiên 1: HP nguy hiểm
@@ -1250,7 +1213,11 @@ function heuristicFallbackDecision() {
   if (nearestMob && nearDist < 8 && !isCreeper) return { action: 'attack_hostile', reason: 'Mob gần' };
   // Ưu tiên 10: Làm task theo stage
   const stage = detectGameStage();
-  return { action: STAGE_ACTION_MAP[stage] || 'chop', reason: `Fallback: stage ${stage}`, _source: 'heuristic' };
+  const stageActions = {
+    early: 'chop', wood: 'mine', stone: 'mine', iron: 'strip_mine',
+    diamond: 'explore', nether: 'explore', pre_end: 'explore', end_done: 'explore'
+  };
+  return { action: stageActions[stage] || 'chop', reason: `Fallback: stage ${stage}`, _source: 'heuristic' };
 }
 
 async function executeAIDecision(decision) {
@@ -1265,7 +1232,8 @@ async function executeAIDecision(decision) {
     _aiRepeatCount++;
     if (_aiRepeatCount >= 3) {
       const curStage = detectGameStage();
-      const newAction = STAGE_ACTION_MAP[curStage] || 'chop';
+      const forced = { early:'chop',wood:'mine',stone:'mine',iron:'strip_mine',diamond:'explore',nether:'explore',pre_end:'explore',end_done:'explore' };
+      const newAction = forced[curStage] || 'chop';
       logW(`[AI] Anti-repeat: "${action}" ×${_aiRepeatCount} → buộc sang "${newAction}"`);
       action = newAction;
       _aiRepeatCount = 0;
@@ -1347,7 +1315,11 @@ async function executeAIDecision(decision) {
     case 'attack_hostile': {
       // Equip vũ khí tốt nhất trước khi tấn công
       try { await equipBestWeapon?.(); } catch(_){}
-      const hostile = findNearbyHostiles(bot, 20).find(e => e.name !== 'creeper');
+      const hostile = Object.values(bot?.entities||{})
+        .filter(e => e.type==='mob' && HOSTILE_MOBS.has(e.name||e.mobType||'')
+          && e.position?.distanceTo(bot.entity?.position) < 20
+          && e.name !== 'creeper') // không attack creeper
+        .sort((a,b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0];
       if (hostile && bot?.pvp) {
         bot._task = `⚔️ tấn công ${hostile.name}`;
         try { bot.pvp.attack(hostile); } catch(_){}
@@ -1363,7 +1335,9 @@ async function executeAIDecision(decision) {
       try { bot.pvp?.stop(); bot.pathfinder?.setGoal(null); } catch(_){}
 
       const _retreatPos = bot.entity?.position;
-      const retreatHostiles = findNearbyHostiles(bot, 30);
+      const retreatHostiles = _retreatPos ? Object.values(bot?.entities||{})
+        .filter(e => e.type==='mob' && HOSTILE_MOBS.has(e.name||e.mobType||'')
+          && e.position?.distanceTo(_retreatPos) < 30) : [];
 
       if (retreatHostiles.length > 0 && _retreatPos) {
         const cx = retreatHostiles.reduce((s,e) => s + e.position.x, 0) / retreatHostiles.length;
@@ -1418,7 +1392,7 @@ async function executeAIDecision(decision) {
               try {
                 await Promise.race([
                   bot.pathfinder.goto(new goals.GoalNear(furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z, 2)),
-                  sleep(8000),
+                  new Promise(r => setTimeout(r, 8000)),
                 ]);
                 furnaceWindow = await bot.openFurnace(bot.blockAt(furnaceBlock.position));
                 if (furnaceWindow) {
@@ -1427,7 +1401,7 @@ async function executeAIDecision(decision) {
                   const rawCount = bot.inventory.items().find(i=>i.name===smeltTarget.raw)?.count || 1;
                   await furnaceWindow.putFuel(fuelInfo.id, null, Math.min(fuelItem.count, 8));
                   await furnaceWindow.putInput(rawInfo.id, null, Math.min(rawCount, 8));
-                  await sleep(3500);
+                  await new Promise(r => setTimeout(r, 3500));
                   logS(`[AI] Smelt xong: ${smeltTarget.raw} → ${smeltTarget.cooked}`);
                 }
               } catch(e) {
@@ -1479,7 +1453,9 @@ function shouldCallAI() {
   if (isBusy && !AI_INTERRUPTIBLE_TASKS.has(bot._task || 'idle')) return false;
 
   // ── State cache: tiết kiệm API call khi không có gì thay đổi ──────
-  const mobCount = findNearbyHostiles(bot, 20).length;
+  const mobCount = Object.values(bot.entities || {})
+    .filter(e => e.type === 'mob' && HOSTILE_MOBS.has(e.name || e.mobType || '')
+      && e.position?.distanceTo(bot.entity?.position) < 20).length;
   const stage = aiGameStage;
   const now   = Date.now();
 
@@ -1536,7 +1512,10 @@ function startAIMode() {
     // Tự vệ KHẨN CẤP: mob đang tấn công trực tiếp (< 3m) — làm kể cả manual override
     // Chỉ khi HP đang bị tổn thương (< 18) và không đang fleeing
     if (hp < 18 && !activeDuel && !isFleeing && autoAttackEnabled && bot.entity) {
-      const immediateThreat = findNearbyHostiles(bot, 3)[0];
+      const immediateThreat = Object.values(bot.entities || {})
+        .filter(e => e.type === 'mob' && HOSTILE_MOBS.has(e.name || e.mobType || '')
+          && e.position?.distanceTo(bot.entity.position) < 3) // chỉ mob sát bên (3m, không phải 5m)
+        .sort((a,b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0];
       if (immediateThreat && bot?.pvp && immediateThreat.name !== 'creeper') {
         try { await equipBestWeapon(); bot.pvp.attack(immediateThreat); } catch(_){}
       }
@@ -1638,12 +1617,12 @@ async function equipBestArmor() {
     const ws = { head:5, torso:6, legs:7, feet:8 }[dest];
     const worn = bot.inventory.slots[ws];
     const wi = worn ? p.indexOf(worn.name) : Infinity;
-    if (best && bi < wi) { try { await bot.equip(best, dest); await sleep(200); logS(`Mặc ${best.name}`); } catch(e) { logW(`Lỗi mặc giáp: ${e.message}`); } }
+    if (best && bi < wi) { try { await bot.equip(best, dest); await new Promise(r => setTimeout(r,200)); logS(`Mặc ${best.name}`); } catch(e) { logW(`Lỗi mặc giáp: ${e.message}`); } }
   }
   // Auto-chuyển khiên sang tay trái nếu chưa cầm
   const offHand = bot.inventory.slots[45];
   if (!offHand || offHand.name !== 'shield') {
-    const shield = findInvItem(bot, 'shield');
+    const shield = bot.inventory.items().find(i => i.name === 'shield');
     if (shield) {
       try { await bot.equip(shield, 'off-hand'); logS('🛡 Khiên → tay trái'); } catch(e) {}
     }
@@ -1684,10 +1663,12 @@ async function autoEat() {
 // ── AUTO HUNT ──────────────────────────────────────────────────────
 // Khi đói/máu yếu và không có đồ ăn chín → săn động vật gần nhất, ăn thịt sống
 const HUNTABLE_MOBS = new Set(['cow','pig','sheep','chicken','rabbit','mooshroom','hoglin']);
+const RAW_MEATS = ['raw_beef','raw_porkchop','raw_mutton','raw_chicken','raw_rabbit'];
+const COOKED_FOODS = ['cooked_beef','cooked_porkchop','cooked_mutton','cooked_chicken','cooked_salmon','cooked_cod','bread','baked_potato'];
 
 async function tryEatRaw() {
   if (isEating || !mcData) return;
-  for (const n of RAW_FOODS) {
+  for (const n of RAW_MEATS) {
     const info = mcData.itemsByName[n]; if (!info) continue;
     const item = bot.inventory.findInventoryItem(info.id, null, false);
     if (item) {
@@ -1750,13 +1731,13 @@ async function startAutoHunt() {
 
       // Chờ con vật chết tối đa 10s
       for (let i = 0; i < 33; i++) {
-        await sleep(300);
+        await new Promise(r => setTimeout(r, 300));
         if (!bot.entities[nearest.id]) break; // đã chết
       }
       try { bot.pvp.stop(); } catch(_){}
 
       // Chờ item rơi vào túi (~1.5s)
-      await sleep(1500);
+      await new Promise(r => setTimeout(r, 1500));
 
       // Ăn ngay nếu vẫn đói/yếu
       if ((bot.food ?? 20) < 14 || (bot.health ?? 20) < 12) {
@@ -2077,7 +2058,7 @@ async function equipBestWeapon() {
 async function equipCombatLoadout() {
   if (!bot) return;
   await equipBestWeapon();
-  const shield = findInvItem(bot, 'shield');
+  const shield = bot.inventory.slots.find(i => i && i.name === 'shield');
   if (shield) {
     try {
       await bot.equip(shield, 'off-hand');
@@ -2097,7 +2078,7 @@ async function collectBotWater(label) {
   // Thu hồi theo vị trí đã ghi trước
   while (_botPlacedWaterPositions.length > 0) {
     const pos = _botPlacedWaterPositions.shift();
-    const emptyBucket = findInvItem(bot, 'bucket');
+    const emptyBucket = bot.inventory.items().find(i => i.name === 'bucket');
     if (!emptyBucket) break; // không còn bucket rỗng
     // Tìm source block quanh vị trí đã đặt (nước có thể chảy lệch 1-2 block)
     let wb = null;
@@ -2116,12 +2097,12 @@ async function collectBotWater(label) {
       const gotoTimeout = Math.min(12000, Math.max(3000, distToWater * 250));
       await Promise.race([
         bot.pathfinder.goto(new GoalNear(wb.position.x, wb.position.y, wb.position.z, 2)),
-        sleep(gotoTimeout),
+        new Promise(r => setTimeout(r, gotoTimeout)),
       ]);
       await bot.equip(emptyBucket, 'hand');
       await bot.lookAt(wb.position.offset(0.5, 0.5, 0.5), true);
       bot.activateItem();
-      await sleep(450);
+      await new Promise(r => setTimeout(r, 450));
       if (bot.inventory.items().some(i => i.name === 'water_bucket')) {
         logS(`[${tag}] ✅ Thu hồi nước tại (${Math.round(wb.position.x)},${Math.round(wb.position.y)},${Math.round(wb.position.z)})`);
         collected++;
@@ -2135,7 +2116,7 @@ async function collectBotWater(label) {
 // Đặt nước dưới chân bot, ghi vị trí để thu hồi sau
 async function tryPlaceWaterBucket(enemyPos) {
   if (!bot || !mcData) return false;
-  const bucket = findInvItem(bot, 'water_bucket');
+  const bucket = bot.inventory.items().find(i => i.name === 'water_bucket');
   if (!bucket) return false;
 
   const myPos = bot.entity.position;
@@ -2146,13 +2127,13 @@ async function tryPlaceWaterBucket(enemyPos) {
     await bot.equip(bucket, 'hand');
     // Nhìn XUỐNG để đặt nước dưới chân (góc pitch = PI/2 = nhìn thẳng xuống đất)
     await bot.look(bot.entity.yaw, Math.PI / 2, true);
-    await sleep(80);
+    await new Promise(r => setTimeout(r, 80));
     bot.activateItem(); // right-click → đặt nước
     // Ghi vị trí để thu hồi sau
     const waterPos = myPos.offset(0, -1, 0);
     _botPlacedWaterPositions.push(waterPos.clone());
     logS('[PvP] 🪣 Đặt nước dưới chân — làm chậm kẻ thù!');
-    await sleep(400);
+    await new Promise(r => setTimeout(r, 400));
     return true;
   } catch(e) { return false; }
 }
@@ -2173,7 +2154,7 @@ async function waterClutch() {
   _waterClutchActive = true;
   logS('[Clutch] 🪣 WATER CLUTCH! Đặt nước để hạ cánh an toàn...');
   try {
-    const bucket = findInvItem(bot, 'water_bucket');
+    const bucket = bot.inventory.items().find(i => i.name === 'water_bucket');
     if (!bucket) { _waterClutchActive = false; return; }
 
     await bot.equip(bucket, 'hand');
@@ -2182,7 +2163,7 @@ async function waterClutch() {
     bot.activateItem();
     const waterPos = bot.entity.position.offset(0, -1, 0);
     _botPlacedWaterPositions.push(waterPos.clone());
-    await sleep(200);
+    await new Promise(r => setTimeout(r, 200));
 
     // Chờ chạm đất (tối đa 4s)
     await new Promise(resolve => {
@@ -2194,7 +2175,7 @@ async function waterClutch() {
     });
 
     // Đợi 1 tick ổn định rồi thu hồi ngay
-    await sleep(250);
+    await new Promise(r => setTimeout(r, 250));
     await collectBotWater('Clutch');
     // Trang bị lại vũ khí nếu đang PvP
     if (activeDuel) { try { await equipBestWeapon(); } catch(_) {} }
@@ -2219,7 +2200,7 @@ async function throwEnderPearl(targetPos) {
     await bot.equip(pearl, 'hand');
     await bot.lookAt(targetPos.offset(0, 2.5, 0), true); // aim cao hơn đầu địch để pearl bay tới đúng
     bot.activateItem();
-    await sleep(200);
+    await new Promise(r => setTimeout(r, 200));
     bot.deactivateItem();
     logS('[PvP] 🟢 Ném Ender Pearl!');
     return true;
@@ -2235,8 +2216,8 @@ let isDoingSpecialCombo = false;
 async function elytraMaceDive(targetEntity) {
   if (!bot || !mcData || isDoingSpecialCombo) return false;
 
-  const elytra   = findInvItem(bot, 'elytra');
-  const mace     = findInvItem(bot, 'mace');
+  const elytra   = bot.inventory.items().find(i => i.name === 'elytra');
+  const mace     = bot.inventory.items().find(i => i.name === 'mace');
   // Cần ít nhất 1 pháo hoa để boost
   const fireworkInfo = mcData.itemsByName['firework_rocket'];
   const firework = fireworkInfo
@@ -2263,19 +2244,19 @@ async function elytraMaceDive(targetEntity) {
   try {
     // ── Bước 1: Mặc elytra vào ngực, cầm mace sẵn ─────────────────
     await bot.equip(elytra, 'torso');
-    await sleep(120);
+    await new Promise(r => setTimeout(r, 120));
 
     // ── Bước 2: Nhảy lên khỏi mặt đất ─────────────────────────────
     bot.setControlState('jump', true);
-    await sleep(130);
+    await new Promise(r => setTimeout(r, 130));
     bot.setControlState('jump', false);
-    await sleep(120); // đợi rời mặt đất
+    await new Promise(r => setTimeout(r, 120)); // đợi rời mặt đất
 
     // ── Bước 3: Double-tap space để mở elytra glide ────────────────
     bot.setControlState('jump', true);
-    await sleep(80);
+    await new Promise(r => setTimeout(r, 80));
     bot.setControlState('jump', false);
-    await sleep(80);
+    await new Promise(r => setTimeout(r, 80));
 
     // ── Bước 4: Aim THẲNG về phía địch (hướng ngang + chút lên) ───
     let freshT = bot.players[tName]?.entity || targetEntity;
@@ -2289,7 +2270,7 @@ async function elytraMaceDive(targetEntity) {
     if (fw2) {
       await bot.equip(fw2, 'hand');
       bot.activateItem();
-      await sleep(100);
+      await new Promise(r => setTimeout(r, 100));
       bot.deactivateItem();
     }
 
@@ -2326,7 +2307,7 @@ async function elytraMaceDive(targetEntity) {
       // Chạm đất mà chưa đến: break để tránh loop vô hạn
       if (bot.entity.onGround && d > 5) break;
 
-      await sleep(40);
+      await new Promise(r => setTimeout(r, 40));
     }
 
     // ── Bước 7: Đánh mace — momentum từ bay cho thêm sát thương ───
@@ -2339,7 +2320,7 @@ async function elytraMaceDive(targetEntity) {
       } catch(_) {}
     }
 
-    await sleep(300);
+    await new Promise(r => setTimeout(r, 300));
     await cleanup();
     return true;
   } catch(e) {
@@ -2357,7 +2338,7 @@ async function tridentFireworkCombo(targetEntity) {
 
   const tridentInfo  = mcData.itemsByName['trident'];
   const fireworkInfo = mcData.itemsByName['firework_rocket'];
-  const elytra = findInvItem(bot, 'elytra');
+  const elytra = bot.inventory.items().find(i => i.name === 'elytra');
   if (!tridentInfo || !fireworkInfo || !elytra) return false;
 
   const trident  = bot.inventory.findInventoryItem(tridentInfo.id, null, false);
@@ -2386,17 +2367,17 @@ async function tridentFireworkCombo(targetEntity) {
   try {
     // 1. Mặc elytra
     await bot.equip(elytra, 'torso');
-    await sleep(150);
+    await new Promise(r => setTimeout(r, 150));
 
     // 2. Nhảy lên rồi double-jump để mở elytra glide
     bot.setControlState('jump', true);
-    await sleep(120);
+    await new Promise(r => setTimeout(r, 120));
     bot.setControlState('jump', false);
-    await sleep(160);
+    await new Promise(r => setTimeout(r, 160));
     bot.setControlState('jump', true);
-    await sleep(80);
+    await new Promise(r => setTimeout(r, 80));
     bot.setControlState('jump', false);
-    await sleep(80);
+    await new Promise(r => setTimeout(r, 80));
 
     // 3. Aim về phía địch (tính dẫn trước — lead)
     let freshT0 = bot.players[tName]?.entity || targetEntity;
@@ -2410,7 +2391,7 @@ async function tridentFireworkCombo(targetEntity) {
     if (fw2) {
       await bot.equip(fw2, 'hand');
       bot.activateItem();
-      await sleep(120);
+      await new Promise(r => setTimeout(r, 120));
       bot.deactivateItem();
     }
 
@@ -2440,7 +2421,7 @@ async function tridentFireworkCombo(targetEntity) {
       }
 
       if (d < 7) break; // đã đủ gần → ném
-      await sleep(40);
+      await new Promise(r => setTimeout(r, 40));
     }
 
     // 6. Tính aim cuối cùng rất chính xác trước khi ném
@@ -2458,11 +2439,11 @@ async function tridentFireworkCombo(targetEntity) {
 
     // 7. Charge giáo 500ms rồi ném (charge tối đa ~1000ms nhưng 600ms đủ lực)
     bot.activateItem(); // bắt đầu charge giáo
-    await sleep(700);
+    await new Promise(r => setTimeout(r, 700));
     bot.deactivateItem(); // ném!
 
     logS('[PvP] 🔱 GIÁO ĐÃ PHÓNG! Aim chính xác cực dính!');
-    await sleep(900);
+    await new Promise(r => setTimeout(r, 900));
     await cleanupT();
     return true;
   } catch(e) {
@@ -2494,12 +2475,12 @@ async function shootBowWithLead(targetEntity, rangedItem) {
 
     if (rangedItem.name === 'crossbow') {
       bot.activateItem();
-      await sleep(1300);
+      await new Promise(r => setTimeout(r, 1300));
       bot.deactivateItem();
     } else {
       // Bow: giữ 950ms (đủ charge ~100%)
       bot.activateItem();
-      await sleep(950);
+      await new Promise(r => setTimeout(r, 950));
       bot.deactivateItem();
     }
     logS(`[PvP] 🏹 Bắn ${rangedItem.name} dẫn trước ${Math.round(dist)}m (lead ~${flightTicks.toFixed(1)} tick)`);
@@ -2653,9 +2634,9 @@ async function tryUnstuck(targetEntity) {
       bot.setControlState('sprint', true);
       bot.setControlState('forward', true);
       bot.setControlState('jump', true);
-      await sleep(400);
+      await new Promise(r => setTimeout(r, 400));
       bot.setControlState('jump', false);
-      await sleep(300);
+      await new Promise(r => setTimeout(r, 300));
       bot.setControlState('forward', false);
       bot.setControlState('sprint', false);
     } catch(_){}
@@ -2685,13 +2666,13 @@ async function tryUnstuck(targetEntity) {
       // Nhảy 3 lần liên tiếp để leo qua block cao 1 và 1.5
       for (let i = 0; i < 3; i++) {
         bot.setControlState('jump', true);
-        await sleep(300);
+        await new Promise(r => setTimeout(r, 300));
         bot.setControlState('jump', false);
-        await sleep(120);
+        await new Promise(r => setTimeout(r, 120));
       }
       bot.setControlState('forward', false);
       bot.setControlState('sprint', false);
-      await sleep(250);
+      await new Promise(r => setTimeout(r, 250));
 
       // Nếu đã di chuyển được đáng kể → dừng
       if (bot.entity.position.distanceTo(posAtStart) > 1.0) break;
@@ -2705,9 +2686,9 @@ async function tryUnstuck(targetEntity) {
           // Nhảy nhanh liên tiếp để thoát kẹt dốc
           for (let i = 0; i < 5; i++) {
             bot.setControlState('jump', true);
-            await sleep(200);
+            await new Promise(r => setTimeout(r, 200));
             bot.setControlState('jump', false);
-            await sleep(100);
+            await new Promise(r => setTimeout(r, 100));
           }
         }
       } catch(_){}
@@ -2716,7 +2697,7 @@ async function tryUnstuck(targetEntity) {
     bot.setControlState('forward', false);
     bot.setControlState('sprint', false);
     bot.setControlState('jump', false);
-    await sleep(350);
+    await new Promise(r => setTimeout(r, 350));
 
   } catch(e) {
     try { bot.setControlState('forward', false); bot.setControlState('sprint', false); bot.setControlState('jump', false); } catch(_){}
@@ -2785,13 +2766,13 @@ async function startFollow(user) {
 
     // ── Main follow loop ─────────────────────────────────────────
     while (isFollowing && !stopTask) {
-      await sleep(400);
+      await new Promise(r => setTimeout(r, 400));
 
       // Nếu player thoát khỏi tầm nhìn/respawn: chờ và re-path
       if (!player.entity) {
         try { bot.pathfinder.setGoal(null); } catch(e){}
         while (!player.entity && isFollowing && !stopTask) {
-          await sleep(500);
+          await new Promise(r => setTimeout(r, 500));
         }
         if (isFollowing && !stopTask && player.entity) {
           refreshMovements();
@@ -3016,13 +2997,13 @@ async function digContinuous(blockIds, label, who) {
         try {
           await Promise.race([
             bot.pathfinder.goto(new goals.GoalNear(tx, targetY, tz, 3)),
-            sleep(6000),
+            new Promise(r => setTimeout(r, 6000)),
           ]);
         } catch(e) {}
         notFoundStreak = 0;
         continue;
       }
-      await sleep(400);
+      await new Promise(r => setTimeout(r, 400));
       continue;
     }
 
@@ -3055,7 +3036,7 @@ async function digContinuous(blockIds, label, who) {
       await smartDig(fresh, false);
       // Ghi nhớ vị trí quặng để ưu tiên khu vực này lần sau
       if (mcData.blocks[fresh.type]?.name?.includes('ore')) recordOre(fresh);
-      await sleep(100); // 100ms buffer for server lag (Aternos)
+      await new Promise(r => setTimeout(r, 100)); // 100ms buffer for server lag (Aternos)
 
     } catch(e) {
       skipped.add(block.position.toString());
@@ -3207,7 +3188,7 @@ const FARM_FRUITS = ['melon','pumpkin','sugar_cane','bamboo'];
             await bot.craft(repairRecipe, 1, null); // null = inventory 2×2
             combinedCount++;
             logS(`[Combine] Gộp 2x ${name} → 1x ${name} (bền ~${newDur}/${a.maxDurability})`);
-            await sleep(300);
+            await new Promise(r => setTimeout(r, 300));
           } catch(e) {
             logW(`[Combine] Lỗi gộp ${name}: ${e.message}`);
             break;
@@ -3305,7 +3286,7 @@ const FARM_FRUITS = ['melon','pumpkin','sugar_cane','bamboo'];
         }
         logS(`[Farm] Không có crop chín, chờ 30s (lần ${bot._farmWaitCount}/3)...`);
         bot.chat(`Chưa có gì chín, chờ thêm ${(4 - bot._farmWaitCount) * 30}s...`);
-        await sleep(30000);
+        await new Promise(r => setTimeout(r, 30000));
         continue;
       }
       bot._farmWaitCount = 0;
@@ -3333,7 +3314,7 @@ const FARM_FRUITS = ['melon','pumpkin','sugar_cane','bamboo'];
           if (hoe) { try { await bot.equip(hoe, 'hand'); } catch(_){} }
         }
         await smartDig(target.block, false); harvested++; // false = không equip lại (hoe đã equip)
-        await sleep(250);
+        await new Promise(r => setTimeout(r, 250));
 
         // Trồng lại nếu có hạt giống
         const seedName = target.crop.seed;
@@ -3357,10 +3338,10 @@ const FARM_FRUITS = ['melon','pumpkin','sugar_cane','bamboo'];
       }
     } catch(e) {
       logW(`Lỗi farm: ${e.message}`);
-      await sleep(400);
+      await new Promise(r => setTimeout(r, 400));
     }
 
-    await sleep(120);
+    await new Promise(r => setTimeout(r, 120));
   }
   } finally {
     isBusy = false; if (!isFollowing) startWander();
@@ -3511,9 +3492,9 @@ async function digDownTo(targetY) {
     try {
       await Promise.race([
         bot.pathfinder.goto(new GoalNear(bx, curY - 2, bz, 1)),
-        sleep(4000),
+        new Promise(r => setTimeout(r, 4000)),
       ]);
-    } catch(_) { await sleep(500); }
+    } catch(_) { await new Promise(r => setTimeout(r, 500)); }
 
     if (Math.floor(bot.entity.position.y) >= curY) {
       for (const [dx, dz2] of [[0,0],[1,0],[-1,0],[0,1],[0,-1]]) {
@@ -3522,7 +3503,7 @@ async function digDownTo(targetY) {
           try { await equipToolForBlock(blk); await bot.dig(blk, true); } catch(_) {}
         }
       }
-      await sleep(600);
+      await new Promise(r => setTimeout(r, 600));
     }
   }
 }
@@ -3761,7 +3742,7 @@ async function autoTreeFarm(who) {
           ab = bot.blockAt(ab.position.offset(0, 1, 0));
         }
       } catch(e) { logW(`TreeFarm chặt: ${e.message}`); }
-      await sleep(300);
+      await new Promise(r => setTimeout(r, 300));
       continue;
     }
 
@@ -3781,13 +3762,13 @@ async function autoTreeFarm(who) {
           const placed = await smartPlace(dirt.position.offset(0, 1, 0));
           if (!placed) await bot.placeBlock(dirt, new Vec3(0, 1, 0)); // fallback
         } catch(e) { logW(`Trồng cây: ${e.message}`); }
-        await sleep(500);
+        await new Promise(r => setTimeout(r, 500));
         continue;
       }
     }
     // Không tìm thấy cây: chờ cây lớn
     if (chopCount === 0) bot.chat('Không tìm thấy cây trong 48 block. Đứng gần rừng hoặc farm cây rồi thử lại.');
-    await sleep(6000);
+    await new Promise(r => setTimeout(r, 6000));
   }
   } catch(e) { logW('TreeFarm: ' + e.message); }
   finally {
@@ -3825,7 +3806,7 @@ async function autoCobbleFarm(who) {
         await bot.dig(block);
         digCount++;
         activityStats.blocksMinedTotal++;
-      } catch(e) { await sleep(200); }
+      } catch(e) { await new Promise(r => setTimeout(r, 200)); }
     } else {
       const lava  = bot.inventory.items().find(i => i.name === 'lava_bucket');
       const water = bot.inventory.items().find(i => i.name === 'water_bucket');
@@ -3841,7 +3822,7 @@ async function autoCobbleFarm(who) {
         const gr = bot.blockAt(new Vec3(bx + 2, by, bz));
         if (gr) { try { await bot.equip(water, 'hand'); await bot.placeBlock(gr, new Vec3(-1, 0, 0)); } catch(_) {} }
         bot.chat('Đã xây cobble generator!');
-        await sleep(3000);
+        await new Promise(r => setTimeout(r, 3000));
       } else {
         bot.chat('Cần lava_bucket và water_bucket trong túi để xây cobble gen!');
         break;
@@ -4137,7 +4118,7 @@ async function resumeBuild(who) {
       if (built % 20 === 0) saveProgress(filename, prog.origin, absBlocks, placedSet);
       if ((built + skipped) % 10 === 0)
         bot.chat(`Resume ${Math.round((placedSet.size)/total*100)}% (${placedSet.size}/${total})`);
-      await sleep(60);
+      await new Promise(r => setTimeout(r, 60));
     }
     if (!stopTask) {
       clearProgress();
@@ -4188,7 +4169,7 @@ async function cleanupScaffold(blueprintSet, scaffoldLog) {
       const fresh = bot.blockAt(new Vec3(x, y, z));
       if (fresh && fresh.diggable && fresh.name !== 'air') await smartDig(fresh, false);
     } catch(e) { logW(`cleanup scaffold@${x},${y},${z}: ${e.message}`); }
-    await sleep(40);
+    await new Promise(r => setTimeout(r, 40));
   }
   bot.chat('✅ Đã dọn scaffold tạm xong!');
 }
@@ -4299,7 +4280,7 @@ async function buildSchematic(filename, who) {
         saveProgress(filename, origin, absBlocks, placedSet);
       if ((built + skipped) % 10 === 0 && absBlocks.length)
         bot.chat(`${Math.round((built+skipped)/absBlocks.length*100)}% (${built}/${absBlocks.length})`);
-      await sleep(60);
+      await new Promise(r => setTimeout(r, 60));
     }
 
     if (stopTask) {
@@ -4380,7 +4361,7 @@ async function excavate(w, h, l, who) {
       done++;
     } catch(_) {}
     if (done % 25 === 0 && targets.length) bot.chat(`${Math.round(done/targets.length*100)}% (${done}/${targets.length})`);
-    await sleep(60);
+    await new Promise(r => setTimeout(r, 60));
   }
   bot.chat(`Đào hầm xong! ${done}/${targets.length} block.`);
   isBusy = false; if (!isFollowing) startWander();
@@ -4425,7 +4406,7 @@ async function fillRegion(x1, y1, z1, x2, y2, z2, blockName, who) {
             placed++;
           } catch(e) { logW(`fill ${resolved}@${bx},${by},${bz}: ${e.message}`); skipped++; }
           if ((placed+skipped) % 20 === 0) bot.chat(`Fill ${Math.round((placed+skipped)/total*100)}% (${placed}/${total})`);
-          await sleep(50);
+          await new Promise(r => setTimeout(r, 50));
         }
       }
     }
@@ -4480,7 +4461,7 @@ async function buildWall(x1, y1, z1, x2, y2, z2, wallH, blockName, who) {
         built++;
       } catch(e) { logW(`wall ${bn}@${x},${y},${z}: ${e.message}`); skip++; }
       if (built % 10 === 0 && blocks.length) bot.chat(`Tường ${Math.round(built/blocks.length*100)}% (${built}/${blocks.length})`);
-      await sleep(60);
+      await new Promise(r => setTimeout(r, 60));
     }
     bot.chat(`Xây tường xong! ${built}/${blocks.length} block. Không đặt được: ${skip}.`);
     restoreWallPlace();
@@ -4610,7 +4591,7 @@ async function veinMine(blockArg, who) {
       if (fresh && allIds.has(fresh.type) && fresh.diggable) await smartDig(fresh, false);
       done++;
     } catch(_) {}
-    await sleep(80);
+    await new Promise(r => setTimeout(r, 80));
   }
   bot.chat(`Đào mạch xong! ${done}/${toMine.length} block.`);
   isBusy = false; if (!isFollowing) startWander();
@@ -4649,7 +4630,7 @@ async function goToSurface(who) {
         try { bot.setControlState('jump',true); await new Promise(r=>setTimeout(r,300)); bot.setControlState('jump',false); } catch(_) {}
       }
       if (iter % 15 === 0) bot.chat(`Lên mặt đất... Y=${Math.round(bot.entity.position.y)}`);
-      await sleep(100);
+      await new Promise(r => setTimeout(r, 100));
     }
     bot.chat(`Đã lên mặt đất! Y=${Math.round(bot.entity.position.y)}`);
   } catch(e) { bot.chat(`Lỗi: ${e.message}`); }
@@ -4685,7 +4666,7 @@ async function exploreArea(who) {
         ]);
       } catch(_) {}
       if (i % 4 === 0) bot.chat(`Khám phá (${tx}, ${tz}) [${i+1}/200]`);
-      await sleep(200);
+      await new Promise(r => setTimeout(r, 200));
       // Advance spiral
       gx += DX[dir]; gz += DZ[dir]; segCount++;
       if (segCount === seg) {
@@ -4730,7 +4711,7 @@ async function startAutoFish(who) {
 
     while (!stopTask && isFishing) {
       // ── BUG FIX #7: Kiểm tra cần câu + cảnh báo độ bền ─────────────
-      const rod = findInvItem(bot, 'fishing_rod');
+      const rod = bot.inventory.items().find(i => i.name === 'fishing_rod');
       if (!rod) {
         stopMsg = 'Không có cần câu trong túi!';
         bot.chat(stopMsg); break;
@@ -4750,9 +4731,9 @@ async function startAutoFish(who) {
       // ── BUG FIX #4: equip + delay trước khi cast ────────────────────
       try { await bot.equip(rod, 'hand'); } catch(e) {
         logW('[Fish] equip rod: ' + e.message);
-        await sleep(1000); continue;
+        await new Promise(r => setTimeout(r, 1000)); continue;
       }
-      await sleep(250); // chờ server confirm equip
+      await new Promise(r => setTimeout(r, 250)); // chờ server confirm equip
 
       // Nhìn về phía nước trước mỗi lần quăng (không chỉ lần đầu)
       try { await bot.lookAt(water.position.offset(0.5, 0.1, 0.5), true); } catch(_) {}
@@ -4760,7 +4741,7 @@ async function startAutoFish(who) {
       // Quăng cần
       try { bot.activateItem(); } catch(e) {
         logW('[Fish] cast: ' + e.message);
-        await sleep(1200); continue;
+        await new Promise(r => setTimeout(r, 1200)); continue;
       }
       castCount++;
       logS(`[Fish] 🎣 Quăng #${castCount}...`);
@@ -4829,7 +4810,7 @@ async function startAutoFish(who) {
       // ── BUG FIX #6 (partial): Kéo cần rồi đếm loot thực sự ─────────
       try { bot.activateItem(); } catch(_) {}
       logS('[Fish] ↩️ Kéo cần!');
-      await sleep(900); // chờ item bay về
+      await new Promise(r => setTimeout(r, 900)); // chờ item bay về
 
       // ── BUG FIX #1: Đếm item câu được bằng cách diff inventory ──────
       if (bitten) {
@@ -4844,7 +4825,7 @@ async function startAutoFish(who) {
 
       await autoEat();
       // Nghỉ ngắn rồi cast tiếp (tránh spam)
-      await sleep(300);
+      await new Promise(r => setTimeout(r, 300));
     }
 
     // ── BUG FIX #6: Chat TRƯỚC khi finally chạy startWander ─────────
@@ -4950,10 +4931,10 @@ function handleTradeChat(user, msg) {
     try {
       await Promise.race([
         bot.pathfinder.goto(new GoalNear(entity.position.x, entity.position.y, entity.position.z, 1)),
-        sleep(4000),
+        new Promise(r => setTimeout(r, 4000)),
       ]);
     } catch(_) {}
-    await sleep(600); // chờ inventory cập nhật
+    await new Promise(r => setTimeout(r, 600)); // chờ inventory cập nhật
 
     // Sau khi nhặt xong → ném đồ của bot lại cho người kia
     const ourItem = bot.inventory.items().find(i =>
@@ -4962,7 +4943,7 @@ function handleTradeChat(user, msg) {
     if (ourItem) {
       const pEnt2 = bot.players[user]?.entity;
       if (pEnt2) { try { bot.lookAt(pEnt2.position.offset(0, 1, 0), true); } catch(_) {} }
-      await sleep(250);
+      await new Promise(r => setTimeout(r, 250));
       bot.tossStack(ourItem).catch(_ => {});
       bot.chat(`${user}: Đây ${ourItem.displayName}!`);
     } else {
@@ -5007,7 +4988,7 @@ async function sortChest(who) {
   };
   try {
     await bot.pathfinder.goto(new GoalNear(cb.position.x, cb.position.y, cb.position.z, 3));
-    await sleep(300);
+    await new Promise(r => setTimeout(r, 300));
     const chest = await bot.openChest(cb);
     // Lấy danh sách + sắp xếp; ghi nhớ số lượng từng loại lấy ra để không deposit thêm đồ riêng của bot
     const chestItemAmounts = new Map();
@@ -5021,10 +5002,10 @@ async function sortChest(who) {
     // Rút hết ra — snapshot trước để tránh iterate array bị thay đổi bởi server update
     const chestSnapshot = [...chest.containerItems()];
     for (const item of chestSnapshot) {
-      try { await chest.withdraw(item.type, null, item.count); await sleep(50); } catch(_) {}
+      try { await chest.withdraw(item.type, null, item.count); await new Promise(r => setTimeout(r, 50)); } catch(_) {}
     }
     chest.close();
-    await sleep(400);
+    await new Promise(r => setTimeout(r, 400));
     // Gửi lại theo thứ tự đã sắp — chỉ deposit đúng số lượng đã lấy ra khỏi rương
     const chest2 = await bot.openChest(cb);
     let n = 0;
@@ -5037,7 +5018,7 @@ async function sortChest(who) {
       const depositCount = Math.min(inv.count, remaining);
       if (depositCount <= 0) continue;
       depositTrack.set(sItem.name, remaining - depositCount);
-      try { await chest2.deposit(inv.type, null, depositCount); n++; await sleep(60); } catch(_) {}
+      try { await chest2.deposit(inv.type, null, depositCount); n++; await new Promise(r => setTimeout(r, 60)); } catch(_) {}
     }
     chest2.close();
     bot.chat(`Đã sắp xếp ${n} loại đồ theo nhóm!`);
@@ -5076,7 +5057,7 @@ async function tryPlaceChestFromInventory() {
           // Nếu timeout, vẫn kiểm tra xem block đã được đặt chưa
           logW(`[PlaceChest] ${pe.message} — kiểm tra lại...`);
         }
-        await sleep(600);
+        await new Promise(r => setTimeout(r, 600));
         logS(`Đặt rương tại (${Math.round(pos.x+dx)},${Math.round(pos.y)},${Math.round(pos.z+dz)})`);
         // Tìm lại block vừa đặt
         const placed = bot.findBlock({
@@ -5163,7 +5144,7 @@ async function depositToChest(who) {
   }
 
   try {
-    await sleep(300);
+    await new Promise(r => setTimeout(r, 300));
     const chest = await bot.openChest(reached);
     const items = bot.inventory.items().filter(i => !shouldKeep(i.name));
     if (!items.length) {
@@ -5176,7 +5157,7 @@ async function depositToChest(who) {
       try {
         await chest.deposit(item.type, null, item.count);
         count++; logS(`→ ${item.name} x${item.count}`);
-        await sleep(180);
+        await new Promise(r => setTimeout(r, 180));
       } catch(e) {
         if (e.message && (e.message.includes('full') || e.message.includes('not enough'))) {
           chestFull = true; logW('Rương đầy!'); break;
@@ -5263,25 +5244,25 @@ async function startDuel(playerName, skipCountdown = false) {
     bot.chat(startMsg || `${playerName} dũng cảm đấy! Tao sẽ không thương tình!`);
 
     // Đếm ngược 3-2-1 trước khi bắt đầu (chạy tới vị trí địch + countdown)
-    await sleep(800);
+    await new Promise(r => setTimeout(r, 800));
     bot.chat('3...');
     // Bắt đầu chạy tới địch trong lúc đếm
     const targetEntityEarly = bot.players[playerName]?.entity;
     if (targetEntityEarly) {
       try { bot.pathfinder.setGoal(new GoalNear(targetEntityEarly.position.x, targetEntityEarly.position.y, targetEntityEarly.position.z, 3), true); } catch(_){}
     }
-    await sleep(1000);
+    await new Promise(r => setTimeout(r, 1000));
     bot.chat('2...');
-    await sleep(1000);
+    await new Promise(r => setTimeout(r, 1000));
     bot.chat('1... ⚔️ Bắt đầu!');
-    await sleep(300);
+    await new Promise(r => setTimeout(r, 300));
   } else {
     // Caller đã đếm + chat rồi, chỉ cần chạy tới địch
     const targetEntityEarly = bot.players[playerName]?.entity;
     if (targetEntityEarly) {
       try { bot.pathfinder.setGoal(new GoalNear(targetEntityEarly.position.x, targetEntityEarly.position.y, targetEntityEarly.position.z, 3), true); } catch(_){}
     }
-    await sleep(300);
+    await new Promise(r => setTimeout(r, 300));
   }
 
   // Hàm lấy entity của đối thủ
@@ -5523,13 +5504,13 @@ async function startDuel(playerName, skipCountdown = false) {
       bot._lastJumpCrit = now;
       // W-tap: dừng sprint 1 tick để reset knockback, sau đó nhảy + đánh
       bot.setControlState('sprint', false);
-      await sleep(50);
+      await new Promise(r => setTimeout(r, 50));
       bot.setControlState('sprint', true);
       bot.setControlState('jump', true);
-      await sleep(100);
+      await new Promise(r => setTimeout(r, 100));
       bot.setControlState('jump', false);
       // Đợi lên đỉnh rồi rơi xuống (velY sẽ < 0) → crit window
-      await sleep(180);
+      await new Promise(r => setTimeout(r, 180));
     }
 
     // ── SMART COMBO: HP địch < 6♥ → rush thẳng, skip strafe ─────────
@@ -6316,7 +6297,7 @@ function createBot() {
          txt.includes('bot') || txt.includes('ban') || txt.includes('bạn'));
       if (isPvpChallenge) {
         await equipBestArmor(); // thử mặc giáp tốt nhất trước
-        await sleep(500);
+        await new Promise(r => setTimeout(r, 500));
         const currentHp = bot.health ?? 0;
         const fullyReady = isFullyArmored() && currentHp >= 19; // đủ giáp VÀ máu đầy
         if (fullyReady) {
@@ -6324,18 +6305,18 @@ function createBot() {
           logS(`[PvP] ${user} thách đấu → chấp nhận (đủ giáp, HP=${Math.round(currentHp)}/20)`);
           const acceptMsg = await getAI(`${user} thách bot đấu PvP 1v1`, `Bot Minecraft chấp nhận đấu tự tin, 1 câu ngắn tiếng Việt.`);
           bot.chat(acceptMsg || `${user} được thôi! Đừng có hối hận!`);
-          await sleep(800);
+          await new Promise(r => setTimeout(r, 800));
           bot.chat('3...');
           // Bắt đầu di chuyển về phía địch trong lúc đếm
           const targetEnt = bot.players[user]?.entity;
           if (targetEnt) {
             try { bot.pathfinder.setGoal(new GoalNear(targetEnt.position.x, targetEnt.position.y, targetEnt.position.z, 3), true); } catch(_){}
           }
-          await sleep(1000);
+          await new Promise(r => setTimeout(r, 1000));
           bot.chat('2...');
-          await sleep(1000);
+          await new Promise(r => setTimeout(r, 1000));
           bot.chat('1... ⚔️ Bắt đầu!');
-          await sleep(300);
+          await new Promise(r => setTimeout(r, 300));
           // skipCountdown=true: tránh đếm 321 lần 2 bên trong startDuel
           startDuel(user, true);
         } else if (!isFullyArmored()) {
@@ -6794,7 +6775,7 @@ async function dropItem(query, who) {
   }
   let dropped = 0;
   for (const item of targets) {
-    try { await bot.toss(item.type, null, item.count); dropped++; await sleep(120); }
+    try { await bot.toss(item.type, null, item.count); dropped++; await new Promise(r => setTimeout(r, 120)); }
     catch(e) { logW(`Lỗi vứt ${item.name}: ${e.message}`); }
   }
   logS(`[${who}] Vứt ${dropped} loại đồ`);
@@ -6804,7 +6785,7 @@ async function dropItem(query, who) {
 // ── SLEEP ─────────────────────────────────────────────────────────
 async function goSleep(who) {
   if (!bot || !mcData) return;
-  resetState(); await sleep(200);
+  resetState(); await new Promise(r => setTimeout(r, 200));
   stopTask = false; isBusy = true; bot._task = 'ngủ'; refreshMovements();
   const BED_BLOCKS = Object.keys(mcData.blocksByName)
     .filter(n => n.endsWith('_bed'))
@@ -6836,7 +6817,7 @@ async function goSleep(who) {
   }
 
   try {
-    await sleep(400);
+    await new Promise(r => setTimeout(r, 400));
     // Thử sleep — trong MC cần phải là ban đêm hoặc thunderstorm
     await bot.sleep(bed);
     logS(`[${who}] Đang ngủ...`);
@@ -6875,7 +6856,7 @@ async function attackPlayer(playerName, who) {
     bot.chat(`Không tìm thấy ${playerName} gần đây`);
     return;
   }
-  resetState(); await sleep(150);
+  resetState(); await new Promise(r => setTimeout(r, 150));
   stopTask = false; isBusy = true; bot._task = `tấn công ${playerName}`; refreshMovements();
   bot.chat(`⚔️ Tấn công ${playerName}!`);
   try { bot.pvp.attack(target); } catch(e) { logW('pvp.attack: ' + e.message); }
@@ -6904,7 +6885,7 @@ async function attackPlayer(playerName, who) {
 // ── BOARD BOAT ────────────────────────────────────────────────────
 async function boardBoat(who) {
   if (!bot || !mcData) return;
-  resetState(); await sleep(200);
+  resetState(); await new Promise(r => setTimeout(r, 200));
   stopTask = false; isBusy = true; bot._task = 'lên thuyền'; refreshMovements();
 
   // Tìm thuyền gần nhất trong 64 block (oak_boat, spruce_boat, bamboo_raft, chest_boat, v.v.)
@@ -6943,7 +6924,7 @@ async function boardBoat(who) {
         // Nếu fail: thử pathfind đến Y thuyền
         try { await bot.pathfinder.goto(new GoalNear(boat0.position.x, Math.floor(boat0.position.y), boat0.position.z, 2)); } catch(_2){}
       }
-      await sleep(400);
+      await new Promise(r => setTimeout(r, 400));
 
       // Lấy lại entity sau khi đã di chuyển (thuyền có thể trôi)
       const boat = findBoat();
@@ -6951,16 +6932,16 @@ async function boardBoat(who) {
 
       // Nhìn vào giữa thuyền
       await bot.lookAt(boat.position.offset(0, (boat.height || 0.9) * 0.5, 0), true);
-      await sleep(200);
+      await new Promise(r => setTimeout(r, 200));
 
       // Thử mount tối đa 5 lần với nhiều phương pháp
       let boarded = false;
       for (let attempt = 0; attempt < 5 && !boarded; attempt++) {
         // Phương pháp 1: bot.mount()
-        try { await bot.mount(boat); await sleep(400); if (bot.vehicle) { boarded = true; break; } } catch(_) {}
+        try { await bot.mount(boat); await new Promise(r => setTimeout(r, 400)); if (bot.vehicle) { boarded = true; break; } } catch(_) {}
 
         // Phương pháp 2: activateEntity (right-click)
-        try { bot.activateEntity(boat); await sleep(400); if (bot.vehicle) { boarded = true; break; } } catch(_) {}
+        try { bot.activateEntity(boat); await new Promise(r => setTimeout(r, 400)); if (bot.vehicle) { boarded = true; break; } } catch(_) {}
 
         // Tiến sát hơn nếu còn cách
         const fresh = findBoat();
@@ -6968,7 +6949,7 @@ async function boardBoat(who) {
         const distToBoat = bot.entity.position.distanceTo(fresh.position);
         if (distToBoat > 1) {
           try { await bot.pathfinder.goto(new GoalNear(fresh.position.x, Math.floor(bot.entity.position.y), fresh.position.z, 1)); } catch(_){}
-          await sleep(300);
+          await new Promise(r => setTimeout(r, 300));
           // Nhìn lại vào thuyền sau khi đến gần
           try { await bot.lookAt(fresh.position.offset(0, 0.5, 0), true); } catch(_){}
         }
@@ -7054,7 +7035,7 @@ async function buildPlatform(x1, y, z1, x2, z2, blockName, who) {
           logW(`[Platform] (${x},${y},${z}): ${e.message}`);
           skipped++;
         }
-        await sleep(40);
+        await new Promise(r => setTimeout(r, 40));
       }
     }
 
@@ -7482,10 +7463,10 @@ function botSayCommands() {
         logActivity('Đến waypoint ' + wp.name);
         // Nhặt loot xung quanh tại mỗi điểm
         await autoLootNearby(8);
-        await sleep(2000);
-      } catch(e) { logW('[Patrol] Không đến được ' + wp.name + ': ' + e.message); await sleep(1000); }
+        await new Promise(r => setTimeout(r, 2000));
+      } catch(e) { logW('[Patrol] Không đến được ' + wp.name + ': ' + e.message); await new Promise(r => setTimeout(r, 1000)); }
       idx++;
-      await sleep(100);
+      await new Promise(r => setTimeout(r, 100));
     }
     } finally {
       isPatrolling = false; isBusy = false;
@@ -7520,7 +7501,7 @@ function botSayCommands() {
       mobFarmAntiAfkTick++;
       // Anti-AFK: nhảy mỗi ~1 phút (30 ticks × 2s)
       if (mobFarmAntiAfkTick % 30 === 0) {
-        try { bot.setControlState('jump', true); await sleep(120); bot.setControlState('jump', false); } catch(e) {}
+        try { bot.setControlState('jump', true); await new Promise(r => setTimeout(r, 120)); bot.setControlState('jump', false); } catch(e) {}
         logS('[MobFarm] Anti-AFK jump');
       }
       // Tấn công mob trong 5m
@@ -7571,7 +7552,7 @@ function botSayCommands() {
         logActivity('Inventory đầy, tự động về nhà');
         sendDiscordAlert('🎒 **' + CONFIG.username + '** inventory đầy! Đang về nhà...');
         resetState();
-        await sleep(200);
+        await new Promise(r => setTimeout(r, 200));
         stopTask = false;
         await goHome('auto');
       } finally { _autoReturning = false; }
@@ -7615,7 +7596,7 @@ function botSayCommands() {
       if (fuel) {
         const fuelSlot = window.slots[4];
         if (!fuelSlot || fuelSlot.name !== 'blaze_powder') {
-          try { await bot.moveSlotItem(fuel.slot, 4); await sleep(300); } catch(e) {}
+          try { await bot.moveSlotItem(fuel.slot, 4); await new Promise(r => setTimeout(r, 300)); } catch(e) {}
         }
       } else { if (bot) bot.chat('Cảnh báo: Không có Blaze Powder để làm nhiên liệu!'); }
 
@@ -7628,20 +7609,20 @@ function botSayCommands() {
       if (!ingredient) { if (bot) bot.chat('Không có nguyên liệu pha thuốc!'); window.close(); isBusy = false; return; }
 
       // Bỏ nguyên liệu vào slot 3
-      try { await bot.moveSlotItem(ingredient.slot, 3); await sleep(300); } catch(e) {}
+      try { await bot.moveSlotItem(ingredient.slot, 3); await new Promise(r => setTimeout(r, 300)); } catch(e) {}
 
       // Bỏ water bottle / potion vào 3 slot (0,1,2)
       const bottles = bot.inventory.items().filter(i => i.name === 'potion' || i.name === 'water_bottle' || i.name === 'splash_potion' || i.name === 'lingering_potion');
       for (let s = 0; s < 3; s++) {
         if (!bottles[s]) break;
-        try { await bot.moveSlotItem(bottles[s].slot, s); await sleep(200); } catch(e) {}
+        try { await bot.moveSlotItem(bottles[s].slot, s); await new Promise(r => setTimeout(r, 200)); } catch(e) {}
       }
 
       if (bot) bot.chat('Đang pha ' + ingredient.name.replace(/_/g,' ') + '... (~20s)');
       logS('[Brewing] Pha ' + ingredient.name + '...');
 
       // Chờ pha xong (~20 giây)
-      await sleep(21000);
+      await new Promise(r => setTimeout(r, 21000));
 
       // Lấy potion ra
       let brewed = 0;
@@ -7649,7 +7630,7 @@ function botSayCommands() {
         const slot = window.slots[s];
         if (slot && slot.name !== 'air' && slot.name !== 'water_bottle' && slot.name !== 'potion') {
           const emptySlot = bot.inventory.firstEmptyInventorySlot();
-          if (emptySlot !== null) { try { await bot.moveSlotItem(s, emptySlot); brewed++; await sleep(200); } catch(e) {} }
+          if (emptySlot !== null) { try { await bot.moveSlotItem(s, emptySlot); brewed++; await new Promise(r => setTimeout(r, 200)); } catch(e) {} }
         }
       }
 
@@ -7738,10 +7719,10 @@ function botSayCommands() {
         }
 
         // Nhặt loot
-        await sleep(300);
+        await new Promise(r => setTimeout(r, 300));
         await autoLootNearby(4);
-      } catch(e) { logW('[FarmSpecial] ' + e.message); await sleep(500); }
-      await sleep(100);
+      } catch(e) { logW('[FarmSpecial] ' + e.message); await new Promise(r => setTimeout(r, 500)); }
+      await new Promise(r => setTimeout(r, 100));
     }
     } finally {
       logActivity('Farm đặc biệt: thu hoạch ' + harvested + ' lượt');
